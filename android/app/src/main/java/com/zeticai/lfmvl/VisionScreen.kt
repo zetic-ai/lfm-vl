@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +33,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -46,6 +48,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -79,6 +82,8 @@ fun VisionScreen(viewModel: VisionViewModel) {
     val context = LocalContext.current
     var replacementUri by remember { mutableStateOf<Uri?>(null) }
     var zoom by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var removalConfirmationOpen by remember { mutableStateOf(false) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { if (state.hasTranscript) replacementUri = it else viewModel.selectImage(it) }
     }
@@ -95,6 +100,10 @@ fun VisionScreen(viewModel: VisionViewModel) {
         onRetry = viewModel::retryInitialize,
         onRegenerate = viewModel::regenerateLast,
         onZoom = { zoom = true },
+        onDownloadModel = viewModel::approveModelDownload,
+        onDeferModelDownload = viewModel::deferModelDownload,
+        onShowModelDownloadConsent = viewModel::showModelDownloadConsent,
+        onOpenSettings = { settingsOpen = true },
     )
     replacementUri?.let { candidate ->
         AlertDialog(
@@ -106,6 +115,26 @@ fun VisionScreen(viewModel: VisionViewModel) {
         )
     }
     if (zoom) state.preview?.let { FullScreenImage(it) { zoom = false } }
+    if (settingsOpen) {
+        ModelSettingsDialog(
+            canRemoveDownloadedModel = state.canRemoveDownloadedModel,
+            modelStatus = state.status,
+            onRemove = {
+                settingsOpen = false
+                removalConfirmationOpen = true
+            },
+            onDismiss = { settingsOpen = false },
+        )
+    }
+    if (removalConfirmationOpen) {
+        ModelRemovalConfirmation(
+            onRemove = {
+                removalConfirmationOpen = false
+                viewModel.removeDownloadedModel()
+            },
+            onDismiss = { removalConfirmationOpen = false },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -120,24 +149,60 @@ internal fun VisionContent(
     onRetry: () -> Unit,
     onRegenerate: () -> Unit,
     onZoom: () -> Unit,
+    onDownloadModel: () -> Unit = {},
+    onDeferModelDownload: () -> Unit = {},
+    onShowModelDownloadConsent: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
 ) {
-    MaterialTheme {
+    LfmVisionTheme {
         Scaffold(
             contentWindowInsets = WindowInsets.safeDrawing,
-            topBar = { TopAppBar(title = { Text("Ask about a photo") }) },
+            topBar = {
+                TopAppBar(
+                    title = { Text("Ask about a photo") },
+                    actions = { TextButton(onClick = onOpenSettings) { Text("Settings") } },
+                )
+            },
             bottomBar = {
                 if (state.status == ModelStatus.READY || state.status == ModelStatus.GENERATING) Composer(state, onPromptChanged, onAsk, onStop)
             },
         ) { padding ->
             when (state.status) {
                 ModelStatus.FAILURE -> FailureView(state.message, onRetry, Modifier.padding(padding))
+                ModelStatus.AWAITING_CONSENT -> DownloadConsentView(onDownloadModel, onDeferModelDownload, Modifier.padding(padding))
+                ModelStatus.DOWNLOAD_DEFERRED -> DeferredDownloadView(onShowModelDownloadConsent, Modifier.padding(padding))
+                ModelStatus.DOWNLOADING -> DownloadingView(state.message, Modifier.padding(padding))
                 ModelStatus.INITIALIZING -> LoadingView(state.message, Modifier.padding(padding))
+                ModelStatus.REMOVING -> RemovingModelView(Modifier.padding(padding))
                 else -> MainView(state, onLibrary, onCamera, onAsk, onRegenerate, onZoom, Modifier.padding(padding))
             }
         }
     }
 }
 
+@Composable private fun DownloadConsentView(download: () -> Unit, defer: () -> Unit, modifier: Modifier) = Box(modifier.fillMaxSize(), Alignment.Center) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Download the vision model?", style = MaterialTheme.typography.titleMedium)
+        Text("The model downloads in the background only after you agree. It may use 1–2 GB of data and storage, and stays on this phone.")
+        Button(onClick = download) { Text("Download model") }
+        TextButton(onClick = defer) { Text("Not now") }
+    }
+}
+@Composable private fun DeferredDownloadView(showConsent: () -> Unit, modifier: Modifier) = Box(modifier.fillMaxSize(), Alignment.Center) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Vision model required", style = MaterialTheme.typography.titleMedium)
+        Text("Download the on-device model when you are ready to ask about a photo.")
+        Button(onClick = showConsent) { Text("Download model") }
+    }
+}
+@Composable private fun DownloadingView(message: String, modifier: Modifier) = Box(modifier.fillMaxSize(), Alignment.Center) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        CircularProgressIndicator()
+        Text("Download in progress", style = MaterialTheme.typography.titleMedium)
+        Text(message, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+        Text("You can use the model when this download finishes.", style = MaterialTheme.typography.bodySmall)
+    }
+}
 @Composable private fun LoadingView(message: String, modifier: Modifier) = Box(modifier.fillMaxSize(), Alignment.Center) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         CircularProgressIndicator(); Text("Initializing model…", style = MaterialTheme.typography.titleMedium)
@@ -145,11 +210,50 @@ internal fun VisionContent(
         Text("Preparing the on-device model.", style = MaterialTheme.typography.bodySmall)
     }
 }
+@Composable private fun RemovingModelView(modifier: Modifier) = Box(modifier.fillMaxSize(), Alignment.Center) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        CircularProgressIndicator()
+        Text("Removing downloaded model…", style = MaterialTheme.typography.titleMedium)
+    }
+}
 @Composable private fun FailureView(message: String, retry: () -> Unit, modifier: Modifier) = Box(modifier.fillMaxSize(), Alignment.Center) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Model unavailable", style = MaterialTheme.typography.titleLarge); Text(message); Button(onClick = retry) { Text("Try again") }
     }
 }
+
+@Composable private fun ModelSettingsDialog(
+    canRemoveDownloadedModel: Boolean,
+    modelStatus: ModelStatus,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit,
+) = AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Settings") },
+    text = {
+        Text(
+            if (canRemoveDownloadedModel) {
+                "Remove the downloaded model. Downloading it again will require your consent."
+            } else if (modelStatus in setOf(ModelStatus.GENERATING, ModelStatus.INITIALIZING, ModelStatus.REMOVING)) {
+                "Finish the active response before removing the downloaded model."
+            } else {
+                "There is no downloaded model to remove."
+            },
+        )
+    },
+    confirmButton = {
+        Button(onClick = onRemove, enabled = canRemoveDownloadedModel) { Text("Remove downloaded model") }
+    },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+)
+
+@Composable private fun ModelRemovalConfirmation(onRemove: () -> Unit, onDismiss: () -> Unit) = AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Remove downloaded model?") },
+    text = { Text("Only the downloaded model will be removed. Your photos, prompts, and conversations will stay on this phone.") },
+    confirmButton = { Button(onClick = onRemove) { Text("Remove model") } },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+)
 
 @Composable private fun MainView(state: VisionUiState, library: () -> Unit, camera: () -> Unit, ask: (String?) -> Unit, regenerate: () -> Unit, zoom: () -> Unit, modifier: Modifier) {
     val listState = rememberLazyListState()
@@ -167,10 +271,24 @@ internal fun VisionContent(
 }
 @Composable private fun SelectedPhoto(bitmap: Bitmap, library: () -> Unit, camera: () -> Unit, disabled: Boolean, zoom: () -> Unit) = Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Button(onClick = zoom, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Image(bitmap.asImageBitmap(), "Selected photo. Double-tap to view full screen.", Modifier.fillMaxWidth().heightIn(max = 220.dp)) }
-    Row(verticalAlignment = Alignment.CenterVertically) { SourceButtons(library, camera, disabled); Spacer(Modifier.weight(1f)); Text("Model sees 512 px", style = MaterialTheme.typography.labelSmall) }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth >= 310.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SourceButtons(library, camera, disabled)
+                Spacer(Modifier.weight(1f))
+                Text("Model sees 512 px", style = MaterialTheme.typography.labelSmall)
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SourceButtons(library, camera, disabled)
+                Text("Model sees 512 px", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
 }
 @Composable private fun SourceButtons(library: () -> Unit, camera: () -> Unit, disabled: Boolean) = Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    Button(onClick = camera, enabled = !disabled) { Text("Camera") }; Button(onClick = library, enabled = !disabled) { Text("Library") }
+    Button(onClick = camera, enabled = !disabled, modifier = Modifier.widthIn(min = 88.dp).heightIn(min = 44.dp).testTag("camera_button")) { Text("Camera") }
+    Button(onClick = library, enabled = !disabled, modifier = Modifier.widthIn(min = 88.dp).heightIn(min = 44.dp).testTag("library_button")) { Text("Library") }
 }
 @Composable private fun SuggestionRow(enabled: Boolean, ask: (String?) -> Unit) = Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
     VisionViewModel.suggestions.forEach { Button(onClick = { ask(it) }, enabled = enabled) { Text(it, maxLines = 1) } }

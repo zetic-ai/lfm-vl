@@ -9,15 +9,16 @@ struct AnswerBubble: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(turn.question)
                 .font(.subheadline.weight(.semibold))
+                .foregroundStyle(LfmPalette.ink)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(10)
-                .background(Color.accentColor.opacity(0.15))
+                .background(LfmPalette.accent.opacity(0.15))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
 
             if let failure = turn.failure {
                 Label(failure, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(LfmPalette.error)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if turn.answer.isEmpty && turn.isStreaming {
                 statusLabel
@@ -53,10 +54,11 @@ struct AnswerBubble: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(turn.answer)
                 .font(.body)
+                .foregroundStyle(LfmPalette.ink)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
-                .background(Color(.systemGray6))
+                .background(LfmPalette.surfaceSubtle)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
 
             if !turn.isStreaming {
