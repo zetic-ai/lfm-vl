@@ -1,8 +1,8 @@
 # LFM Vision for Android
 
 This Jetpack Compose app uses LFM2.5-VL-450M through
-`com.zeticai.mlange:mlange:1.10.0` to answer questions about a selected or
-captured photo on-device.
+the configured internal ZETIC.MLange SDK release to answer questions about a
+selected or captured photo on-device.
 
 ## Requirements
 
@@ -30,4 +30,6 @@ The default application ID is `com.zeticai.lfmvl.android`. Change it if it
 conflicts with an application ID in your environment.
 
 The app uses the system photo picker or camera capture, scales the selected
-image to a 512-pixel maximum edge, and streams responses into the UI.
+image to a 512-pixel maximum edge, and streams responses into the UI. The
+first model download begins only after an explicit in-app approval; a later
+launch resumes only that versioned approval.

@@ -1,3 +1,9 @@
 <resources>
-    <style name="Theme.LFMVision" parent="android:style/Theme.Material.Light.NoActionBar" />
+    <style name="Theme.LFMVision" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">#2DBDB2</item>
+        <item name="android:colorBackground">#FFFFFF</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
 </resources>

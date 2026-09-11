@@ -4,26 +4,40 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.zeticai.mlange.core.background.BackgroundDownloadState
 import com.zeticai.mlange.core.model.llm.ZeticMLangeLLMModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
-enum class ModelStatus { INITIALIZING, READY, GENERATING, FAILURE }
+enum class ModelStatus { AWAITING_CONSENT, DOWNLOAD_DEFERRED, DOWNLOADING, INITIALIZING, READY, GENERATING, REMOVING, FAILURE }
 
 data class VisionUiState(
-    val status: ModelStatus = ModelStatus.INITIALIZING,
-    val message: String = "Initializing model…",
+    val status: ModelStatus = ModelStatus.AWAITING_CONSENT,
+    val message: String = "Download the on-device model to continue.",
     val prompt: String = VisionViewModel.DEFAULT_PROMPT,
     val imageUri: Uri? = null,
     val preview: Bitmap? = null,
     val turns: List<VisionTurn> = emptyList(),
     val imageUpdating: Boolean = false,
+    val backgroundDownload: BackgroundModelDownloadState? = null,
 ) {
     val canAsk get() = status == ModelStatus.READY && preview != null && prompt.isNotBlank() && !imageUpdating
     val hasTranscript get() = turns.isNotEmpty()
+    val canRemoveDownloadedModel
+        get() = backgroundDownload?.canRemove == true && status !in setOf(
+            ModelStatus.GENERATING,
+            ModelStatus.INITIALIZING,
+            ModelStatus.REMOVING,
+        )
 }
 
 class VisionViewModel(application: Application) : AndroidViewModel(application) {
@@ -33,19 +47,187 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
     private var image: ZeticMLangeLLMModel.Image? = null
     private var imageUpdateInProgress = false
     private val engineWork = EngineWorkQueue()
+    private val modelDownload = LfmBackgroundModelDownload(application.applicationContext, BuildConfig.ZETIC_PERSONAL_KEY)
+    private var backgroundDownloadJob: Job? = null
+    private val backgroundDownloadGeneration = AtomicLong()
+    private val backgroundDownloadStateLock = Any()
+    private val modelRemovalInProgress = AtomicBoolean()
     private var turnId = 0L
     private var generationId = 0L
     private var activeGenerationId: Long? = null
 
-    init { if (isUsablePersonalKey(BuildConfig.ZETIC_PERSONAL_KEY)) initialize() else showMissingKey() }
+    init { if (isUsablePersonalKey(BuildConfig.ZETIC_PERSONAL_KEY)) prepareBackgroundDownload() else showMissingKey() }
 
     fun updatePrompt(prompt: String) = _uiState.update { it.copy(prompt = prompt) }
 
     fun retryInitialize() {
         if (isUsablePersonalKey(BuildConfig.ZETIC_PERSONAL_KEY)) {
-            _uiState.update { it.copy(status = ModelStatus.INITIALIZING, message = "Initializing model…") }
-            initialize()
+            prepareBackgroundDownload()
         } else showMissingKey()
+    }
+
+    /** This is called only by the explicit consent action, never from app startup. */
+    fun approveModelDownload() {
+        if (modelRemovalInProgress.get()) return
+        if (!isUsablePersonalKey(BuildConfig.ZETIC_PERSONAL_KEY)) {
+            showMissingKey()
+            return
+        }
+        val generation = invalidateBackgroundDownloadWork()
+        runForCurrentBackgroundDownload(generation) {
+            _uiState.update {
+                it.copy(
+                    status = ModelStatus.DOWNLOADING,
+                    message = "Model download in progress",
+                    backgroundDownload = BackgroundModelDownloadState(BackgroundDownloadState.QUEUED),
+                )
+            }
+        }
+        backgroundDownloadJob = viewModelScope.launch {
+            val download = modelDownload.grantConsentAndSchedule()
+            if (!isCurrentBackgroundDownload(generation)) return@launch
+            observeBackgroundDownload(download, generation)
+        }
+    }
+
+    /** Deferring never writes consent or creates a background SDK task. */
+    fun deferModelDownload() {
+        if (modelDownload.hasCurrentConsent) return
+        val generation = invalidateBackgroundDownloadWork()
+        runForCurrentBackgroundDownload(generation) {
+            _uiState.update {
+                it.copy(
+                    status = ModelStatus.DOWNLOAD_DEFERRED,
+                    message = "Download the on-device model when you are ready to ask about a photo.",
+                    backgroundDownload = null,
+                )
+            }
+        }
+    }
+
+    fun showModelDownloadConsent() {
+        if (modelDownload.hasCurrentConsent) return
+        val generation = invalidateBackgroundDownloadWork()
+        runForCurrentBackgroundDownload(generation) {
+            _uiState.update {
+                it.copy(
+                    status = ModelStatus.AWAITING_CONSENT,
+                    message = "Download the on-device model to continue.",
+                    backgroundDownload = null,
+                )
+            }
+        }
+    }
+
+    /** A returning user resumes only a background transfer approved at this consent version. */
+    private fun prepareBackgroundDownload() {
+        if (modelRemovalInProgress.get()) return
+        if (!modelDownload.hasCurrentConsent) {
+            showModelDownloadConsent()
+            return
+        }
+        val generation = invalidateBackgroundDownloadWork()
+        backgroundDownloadJob = viewModelScope.launch {
+            val download = modelDownload.scheduleIfConsented()
+            if (!isCurrentBackgroundDownload(generation)) return@launch
+            if (download == null) showMissingKey() else observeBackgroundDownload(download, generation)
+        }
+    }
+
+    private suspend fun observeBackgroundDownload(initial: BackgroundModelDownloadState, generation: Long) {
+        if (!isCurrentBackgroundDownload(generation)) return
+        var download = initial
+        publishDownloadStatus(download, generation)
+        while (download.isActive) {
+            delay(BACKGROUND_DOWNLOAD_POLL_INTERVAL_MILLIS)
+            val refreshed = modelDownload.refresh() ?: break
+            if (!isCurrentBackgroundDownload(generation)) return
+            download = refreshed
+            publishDownloadStatus(download, generation)
+        }
+        if (download.isInstalled && isCurrentBackgroundDownload(generation)) initialize(generation)
+    }
+
+    private fun publishDownloadStatus(download: BackgroundModelDownloadState, generation: Long) {
+        runForCurrentBackgroundDownload(generation) {
+            _uiState.update {
+                when {
+                    download.isActive -> it.copy(
+                        status = ModelStatus.DOWNLOADING,
+                        message = "Model download in progress",
+                        backgroundDownload = download,
+                    )
+                    download.isInstalled -> it.copy(
+                        status = ModelStatus.INITIALIZING,
+                        message = "Initializing model…",
+                        backgroundDownload = download,
+                    )
+                    else -> it.copy(
+                        status = ModelStatus.FAILURE,
+                        message = download.errorMessage ?: "Model download could not be completed.",
+                        backgroundDownload = download,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Releases the foreground model before SDK-managed artifacts are removed. */
+    fun removeDownloadedModel() {
+        val current = _uiState.value
+        if (!current.canRemoveDownloadedModel || !modelRemovalInProgress.compareAndSet(false, true)) {
+            _uiState.update { it.copy(message = "Finish the active response before removing the model.") }
+            return
+        }
+        val generation = invalidateBackgroundDownloadWork()
+        runForCurrentBackgroundDownload(generation) {
+            _uiState.update { it.copy(status = ModelStatus.REMOVING, message = "Removing downloaded model…") }
+        }
+        engineWork.launch {
+            runCatching {
+                engine.close()
+                modelDownload.removeDownloadedModel()
+            }.onSuccess { removal ->
+                runForCurrentBackgroundDownload(generation) {
+                    modelRemovalInProgress.set(false)
+                    if (removal.isInUse) {
+                        _uiState.update {
+                            it.copy(status = ModelStatus.FAILURE, message = "Finish the active response before removing the model.")
+                        }
+                    } else {
+                        _uiState.update {
+                            it.copy(
+                                status = ModelStatus.AWAITING_CONSENT,
+                                message = "Downloaded model removed. Downloading it again requires your consent.",
+                                backgroundDownload = null,
+                            )
+                        }
+                    }
+                }
+            }.onFailure { error ->
+                if (error !is CancellationException) runForCurrentBackgroundDownload(generation) {
+                    modelRemovalInProgress.set(false)
+                    _uiState.update { it.copy(status = ModelStatus.FAILURE, message = error.message ?: "Could not remove the downloaded model.") }
+                }
+            }
+        }
+    }
+
+    private fun invalidateBackgroundDownloadWork(): Long = synchronized(backgroundDownloadStateLock) {
+        val generation = backgroundDownloadGeneration.incrementAndGet()
+        backgroundDownloadJob?.cancel()
+        backgroundDownloadJob = null
+        generation
+    }
+
+    private fun isCurrentBackgroundDownload(generation: Long) =
+        backgroundDownloadGeneration.get() == generation
+
+    /** Pairs the generation check with the UI write so a cancelled worker cannot publish later. */
+    private fun runForCurrentBackgroundDownload(generation: Long, update: () -> Unit) {
+        synchronized(backgroundDownloadStateLock) {
+            if (backgroundDownloadGeneration.get() == generation) update()
+        }
     }
 
     fun selectImage(uri: Uri) {
@@ -113,14 +295,23 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun initialize() {
+    private fun initialize(generation: Long) {
+        if (!isCurrentBackgroundDownload(generation)) return
         engineWork.launch {
+            if (!isCurrentBackgroundDownload(generation)) return@launch
             runCatching {
-                engine.initialize(BuildConfig.ZETIC_PERSONAL_KEY) { progress ->
-                    _uiState.update { it.copy(status = ModelStatus.INITIALIZING, message = "Initializing — preparing model ${(progress * 100).toInt()}%") }
+                engine.initialize(BuildConfig.ZETIC_PERSONAL_KEY, modelProgress@{ progress ->
+                    runForCurrentBackgroundDownload(generation) {
+                        _uiState.update { it.copy(status = ModelStatus.INITIALIZING, message = "Initializing — preparing model ${(progress * 100).toInt()}%") }
+                    }
+                })
+            }.onSuccess {
+                runForCurrentBackgroundDownload(generation) {
+                    _uiState.update { it.copy(status = ModelStatus.READY, message = "Ready") }
                 }
-            }.onSuccess { _uiState.update { it.copy(status = ModelStatus.READY, message = "Ready") } }
-                .onFailure { error -> if (error !is CancellationException) fail(error) }
+            }.onFailure { error ->
+                if (error !is CancellationException) runForCurrentBackgroundDownload(generation) { fail(error) }
+            }
         }
     }
 
@@ -139,11 +330,16 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
     private fun showMissingKey() { _uiState.value = VisionUiState(status = ModelStatus.FAILURE, message = "ZETIC_PERSONAL_KEY is required before the model can initialize.") }
     private fun fail(error: Throwable) { _uiState.update { it.copy(status = ModelStatus.FAILURE, message = error.message ?: "Model unavailable", imageUpdating = false) } }
 
-    override fun onCleared() { engineWork.close { engine.close() }; super.onCleared() }
+    override fun onCleared() {
+        invalidateBackgroundDownloadWork()
+        engineWork.close { engine.close() }
+        super.onCleared()
+    }
 
     companion object {
         const val DEFAULT_PROMPT = "What is this image about?"
         val suggestions = listOf("Describe this", "Read the text", "What object is this?", "What's happening?")
         fun isUsablePersonalKey(key: String) = key.isNotBlank() && !key.contains("YOUR_KEY", true) && !key.startsWith("dev_YOUR")
+        private const val BACKGROUND_DOWNLOAD_POLL_INTERVAL_MILLIS = 1_000L
     }
 }

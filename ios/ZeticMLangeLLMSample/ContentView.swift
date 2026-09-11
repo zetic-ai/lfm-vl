@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = VisionChatViewModel()
+    @StateObject private var modelDownload = VisionModelDownloadCoordinator()
     @StateObject private var network = NetworkPathObserver()
 
     @State private var showCamera = false
@@ -10,6 +11,9 @@ struct ContentView: View {
     @State private var pickerFailure: String?
     @State private var showZoom = false
     @State private var pendingReplacement: UIImage?
+    @State private var hasDeferredModelDownload = false
+    @State private var isRemoveDownloadedModelConfirmationPresented = false
+    @State private var modelRemovalMessage: String?
     @FocusState private var questionFocused: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -17,7 +21,15 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let failure = viewModel.loadFailure {
+                if !modelDownload.hasDownloadConsent && !hasDeferredModelDownload {
+                    modelDownloadConsentView
+                } else if !modelDownload.hasDownloadConsent {
+                    modelNotDownloadedView
+                } else if let failure = modelDownload.failureMessage {
+                    backgroundDownloadFailureView(failure)
+                } else if modelDownload.isBackgroundDownloadInProgress {
+                    backgroundDownloadView
+                } else if let failure = viewModel.loadFailure {
                     loadFailureView(failure)
                 } else if !viewModel.isModelReady {
                     loadingView
@@ -27,8 +39,17 @@ struct ContentView: View {
             }
             .navigationTitle("Ask about a photo")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar { modelSettingsMenu }
         }
-        .task { await viewModel.loadModel() }
+        .tint(LfmPalette.accent)
+        .task {
+            modelDownload.resumeIfConsented()
+            await loadInstalledModelIfNeeded()
+        }
+        .onChange(of: modelDownload.phase) { _, phase in
+            guard phase == .installed else { return }
+            Task { await loadInstalledModelIfNeeded() }
+        }
         .onDisappear { viewModel.cleanUp() }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { propose($0) }
@@ -57,6 +78,21 @@ struct ContentView: View {
         } message: {
             Text("The answers for the current photo will be cleared.")
         }
+        .confirmationDialog(
+            "Remove downloaded model?",
+            isPresented: $isRemoveDownloadedModelConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Remove model", role: .destructive, action: removeDownloadedModel)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes only the downloaded vision model. Your photos and conversations stay on this phone.")
+        }
+        .alert("Model storage", isPresented: modelRemovalAlertBinding) {
+            Button("OK") { modelRemovalMessage = nil }
+        } message: {
+            Text(modelRemovalMessage ?? "")
+        }
     }
 
     /// A real binding — `.constant(...)` left the alert unable to clear its own state
@@ -69,7 +105,92 @@ struct ContentView: View {
         Binding(get: { pendingReplacement != nil }, set: { if !$0 { pendingReplacement = nil } })
     }
 
+    private var modelRemovalAlertBinding: Binding<Bool> {
+        Binding(get: { modelRemovalMessage != nil }, set: { if !$0 { modelRemovalMessage = nil } })
+    }
+
     // MARK: - Load states
+
+    private var modelDownloadConsentView: some View {
+        ContentUnavailableView {
+            Label("Download the vision model?", systemImage: "arrow.down.circle")
+        } description: {
+            Text("The model is downloaded in the background after you agree. It may use 1–2 GB of data and storage, and stays only on this phone.")
+        } actions: {
+            Button("Download model") { modelDownload.recordConsent() }
+                .buttonStyle(.borderedProminent)
+            Button("Not now") { hasDeferredModelDownload = true }
+        }
+    }
+
+    private var modelNotDownloadedView: some View {
+        ContentUnavailableView {
+            Label("Vision model required", systemImage: "arrow.down.circle")
+        } description: {
+            Text("Download the on-device model when you are ready to ask about a photo.")
+        } actions: {
+            Button("Download model") { hasDeferredModelDownload = false }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var backgroundDownloadView: some View {
+        VStack(spacing: 18) {
+            if case let .downloading(progress) = modelDownload.phase, let progress {
+                ProgressView(value: progress, total: 1.0)
+                    .progressViewStyle(.linear)
+                    .frame(width: 260)
+            } else {
+                ProgressView()
+            }
+
+            VStack(spacing: 6) {
+                Text(modelDownload.phase.title)
+                    .font(.headline)
+                    .accessibilityIdentifier("background-model-download-headline")
+                if let detail = modelDownload.phase.detail {
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(LfmPalette.secondary)
+                        .accessibilityIdentifier("background-model-download-detail")
+                }
+            }
+
+            Text("You can keep this app open or leave it. Asking about a photo will be available when the download finishes.")
+                .font(.caption)
+                .foregroundStyle(LfmPalette.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 36)
+
+            if network.isExpensive || network.isConstrained {
+                Label(
+                    network.isConstrained
+                        ? "Low Data Mode is on — connect to Wi-Fi to avoid a slow or interrupted download."
+                        : "You're on cellular. This download is large — Wi-Fi is strongly recommended.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .multilineTextAlignment(.leading)
+                .padding(12)
+                .background(Color.orange.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal, 28)
+            }
+        }
+        .padding()
+    }
+
+    private func backgroundDownloadFailureView(_ message: String) -> some View {
+        ContentUnavailableView {
+            Label("Model download unavailable", systemImage: "exclamationmark.triangle")
+        } description: {
+            Text(message)
+        } actions: {
+            Button("Try again") { modelDownload.retry() }
+                .buttonStyle(.borderedProminent)
+        }
+    }
 
     private var loadingView: some View {
         VStack(spacing: 18) {
@@ -89,7 +210,7 @@ struct ContentView: View {
 
                 Text(timingText)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LfmPalette.secondary)
                     .monospacedDigit()
             }
 
@@ -97,7 +218,7 @@ struct ContentView: View {
                  ? "The first run may download roughly 1–2 GB. Later launches reuse available SDK-managed model cache."
                  : "Preparing the on-device model.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LfmPalette.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 36)
 
@@ -139,6 +260,56 @@ struct ContentView: View {
         }
     }
 
+    @ToolbarContentBuilder
+    private var modelSettingsMenu: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button("Remove downloaded model", role: .destructive, action: requestDownloadedModelRemoval)
+                    .disabled(!modelDownload.canRemoveDownloadedModel || modelDownload.isRemoving)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel("Model settings")
+        }
+    }
+
+    private func loadInstalledModelIfNeeded() async {
+        guard modelDownload.canUseDownloadedModel else { return }
+        await viewModel.loadModel()
+    }
+
+    private func requestDownloadedModelRemoval() {
+        guard modelDownload.canRemoveDownloadedModel else {
+            modelRemovalMessage = "There is no downloaded model to remove."
+            return
+        }
+        guard modelDownload.isBackgroundDownloadInProgress || viewModel.canRemoveDownloadedModel else {
+            modelRemovalMessage = "Finish the current answer or model preparation before removing the downloaded model."
+            return
+        }
+        isRemoveDownloadedModelConfirmationPresented = true
+    }
+
+    private func removeDownloadedModel() {
+        Task {
+            if !modelDownload.isBackgroundDownloadInProgress,
+               !(await viewModel.closeModelForRemoval()) {
+                modelRemovalMessage = "Finish the current answer or model preparation before removing the downloaded model."
+                return
+            }
+
+            switch await modelDownload.removeDownloadedModel() {
+            case .removed:
+                hasDeferredModelDownload = false
+                modelRemovalMessage = "The downloaded model was removed. Downloading it again will require your approval."
+            case .inUse:
+                modelRemovalMessage = "Finish the current answer before removing the downloaded model."
+            case let .failed(message):
+                modelRemovalMessage = message
+            }
+        }
+    }
+
     // MARK: - Main
 
     private var mainView: some View {
@@ -147,11 +318,12 @@ struct ContentView: View {
             if viewModel.image != nil {
                 suggestionRow
             }
-            Divider()
+            Divider().overlay(LfmPalette.divider)
             transcript
-            Divider()
+            Divider().overlay(LfmPalette.divider)
             composer
         }
+        .background(LfmPalette.surface)
     }
 
     private var imageSection: some View {
@@ -170,14 +342,7 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Selected photo. Double-tap to view full screen.")
 
-                    // Controls sit below the photo rather than on top of it.
-                    HStack(spacing: 10) {
-                        sourceButtons
-                        Spacer()
-                        Text("Model sees \(Int(Constants.maxImageDimension)) px")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
+                    selectedImageControls
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -188,7 +353,7 @@ struct ContentView: View {
                         .foregroundStyle(.tertiary)
                     Text("Take a photo or choose one from your library.")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LfmPalette.secondary)
                     sourceButtons
                 }
                 .frame(maxWidth: .infinity)
@@ -206,15 +371,44 @@ struct ContentView: View {
                     Label("Camera", systemImage: "camera.fill")
                 }
                 .buttonStyle(.borderedProminent)
+                .frame(minHeight: 44)
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityIdentifier("camera_button")
             }
 
             PhotosPicker(selection: $librarySelection, matching: .images, photoLibrary: .shared()) {
                 Label("Library", systemImage: "photo.fill")
             }
             .buttonStyle(.bordered)
+            .frame(minHeight: 44)
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityIdentifier("library_button")
         }
         .labelStyle(.titleAndIcon)
         .font(.footnote)
+    }
+
+    /// Keep the camera and library controls at a 44 pt target instead of compressing their
+    /// labels after an image has been selected. Narrow layouts move the model note below them.
+    private var selectedImageControls: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                sourceButtons
+                Spacer(minLength: 8)
+                modelImageSizeLabel
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                sourceButtons
+                modelImageSizeLabel
+            }
+        }
+    }
+
+    private var modelImageSizeLabel: some View {
+        Text("Model sees \(Int(Constants.maxImageDimension)) px")
+            .font(.caption2)
+            .foregroundStyle(LfmPalette.secondary)
+            .fixedSize(horizontal: true, vertical: false)
     }
 
     /// One-tap questions — the keyboard is the slowest part of asking on a phone.
@@ -230,7 +424,7 @@ struct ContentView: View {
                             .font(.footnote)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
-                            .background(Color(.systemGray6))
+                            .background(LfmPalette.surfaceSubtle)
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -284,7 +478,7 @@ struct ContentView: View {
             TextField("Ask about this image", text: $viewModel.question, axis: .vertical)
                 .lineLimit(1...4)
                 .padding(10)
-                .background(Color(.systemGray6))
+                .background(LfmPalette.surfaceSubtle)
                 .clipShape(RoundedRectangle(cornerRadius: 18))
                 .focused($questionFocused)
                 .disabled(viewModel.image == nil)

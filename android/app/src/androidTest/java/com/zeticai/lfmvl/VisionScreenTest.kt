@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -13,6 +14,8 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import android.graphics.Bitmap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.junit.Rule
@@ -43,6 +46,36 @@ class VisionScreenTest {
 
         composeRule.onNodeWithText("Library").assertIsNotEnabled()
         composeRule.onNodeWithText("Camera").assertIsNotEnabled()
+    }
+
+    @Test fun firstLaunchShowsDownloadConsentWithoutStartingTransfer() {
+        var downloadRequests = 0
+        composeRule.setContent {
+            VisionContent(
+                state = VisionUiState(status = ModelStatus.AWAITING_CONSENT),
+                onPromptChanged = {}, onLibrary = {}, onCamera = {}, onAsk = {}, onStop = {}, onRetry = {}, onRegenerate = {}, onZoom = {},
+                onDownloadModel = { downloadRequests += 1 },
+            )
+        }
+
+        composeRule.onNodeWithText("Download the vision model?").assertIsDisplayed()
+        composeRule.onNodeWithText("Not now").assertIsDisplayed()
+        assertEquals(0, downloadRequests)
+    }
+
+    @Test fun selectedPhotoSourceButtonsKeepFingerSizedTargetsOnNarrowLayout() {
+        val preview = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        composeRule.setContent {
+            Box(Modifier.width(280.dp)) {
+                VisionContent(
+                    state = VisionUiState(status = ModelStatus.READY, preview = preview),
+                    onPromptChanged = {}, onLibrary = {}, onCamera = {}, onAsk = {}, onStop = {}, onRetry = {}, onRegenerate = {}, onZoom = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("camera_button").assertIsDisplayed().assertHeightIsAtLeast(44.dp)
+        composeRule.onNodeWithTag("library_button").assertIsDisplayed().assertHeightIsAtLeast(44.dp)
     }
 
     @Test fun manifestDeclaresInternetPermission() {

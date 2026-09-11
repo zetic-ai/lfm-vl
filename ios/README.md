@@ -46,4 +46,5 @@ by the SDK package.
 
 Follow-up questions about the same photo retain model context. When a different
 photo is selected, the app clears model context before generating its next
-answer.
+answer. The first model download begins only after an explicit in-app approval;
+later launches resume only that versioned approval.
