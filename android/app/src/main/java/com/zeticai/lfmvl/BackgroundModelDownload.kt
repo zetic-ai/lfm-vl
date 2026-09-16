@@ -25,6 +25,8 @@ internal object LfmModelDownloadConsent {
 
 data class BackgroundModelDownloadState(
     val state: BackgroundDownloadState,
+    val bytesDownloaded: Long = 0L,
+    val totalBytes: Long? = null,
     val errorMessage: String? = null,
     val isStatusLookupFailure: Boolean = false,
 ) {
@@ -36,6 +38,16 @@ data class BackgroundModelDownloadState(
 
     val canRemove: Boolean
         get() = isActive || isInstalled
+
+    val statusMessage: String
+        get() = when (state) {
+            BackgroundDownloadState.QUEUED -> "Waiting for the download to start…"
+            BackgroundDownloadState.RESOLVING -> "Finding the model files…"
+            BackgroundDownloadState.DOWNLOADING -> "Downloading model files…"
+            BackgroundDownloadState.VERIFYING -> "Verifying downloaded files…"
+            BackgroundDownloadState.INSTALLED -> "Download complete"
+            else -> errorMessage ?: "The model download could not be completed."
+        }
 
     private companion object {
         val ACTIVE_STATES = setOf(
@@ -169,5 +181,7 @@ class LfmBackgroundModelDownload(
 
 private fun BackgroundDownloadStatus.toUiState() = BackgroundModelDownloadState(
     state = state,
+    bytesDownloaded = bytesDownloaded,
+    totalBytes = totalBytes,
     errorMessage = errorMessage,
 )

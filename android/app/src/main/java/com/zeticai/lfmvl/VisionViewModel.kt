@@ -3,6 +3,7 @@ package com.zeticai.lfmvl.android
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zeticai.mlange.core.background.BackgroundDownloadState
@@ -29,6 +30,11 @@ data class VisionUiState(
     val turns: List<VisionTurn> = emptyList(),
     val imageUpdating: Boolean = false,
     val backgroundDownload: BackgroundModelDownloadState? = null,
+    val downloadElapsedMillis: Long = 0L,
+    val downloadEtaMillis: Long? = null,
+    val initializationProgress: Float? = null,
+    val imageError: String? = null,
+    val modelStorageMessage: String? = null,
 ) {
     val canAsk get() = status == ModelStatus.READY && preview != null && prompt.isNotBlank() && !imageUpdating
     val hasTranscript get() = turns.isNotEmpty()
@@ -39,6 +45,13 @@ data class VisionUiState(
             ModelStatus.REMOVING,
         )
 }
+
+internal const val IMAGE_DECODE_FAILURE_MESSAGE = "That file could not be read as an image."
+
+internal fun VisionUiState.withImageDecodeFailure() = copy(
+    imageUpdating = false,
+    imageError = IMAGE_DECODE_FAILURE_MESSAGE,
+)
 
 class VisionViewModel(application: Application) : AndroidViewModel(application) {
     private val engine = VisionEngine(application.applicationContext)
@@ -60,6 +73,10 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
 
     fun updatePrompt(prompt: String) = _uiState.update { it.copy(prompt = prompt) }
 
+    fun clearImageError() = _uiState.update { it.copy(imageError = null) }
+
+    fun clearModelStorageMessage() = _uiState.update { it.copy(modelStorageMessage = null) }
+
     fun retryInitialize() {
         if (isUsablePersonalKey(BuildConfig.ZETIC_PERSONAL_KEY)) {
             prepareBackgroundDownload()
@@ -78,8 +95,10 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
             _uiState.update {
                 it.copy(
                     status = ModelStatus.DOWNLOADING,
-                    message = "Model download in progress",
+                    message = "Waiting for the download to start…",
                     backgroundDownload = BackgroundModelDownloadState(BackgroundDownloadState.QUEUED),
+                    downloadElapsedMillis = 0L,
+                    downloadEtaMillis = null,
                 )
             }
         }
@@ -137,30 +156,46 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun observeBackgroundDownload(initial: BackgroundModelDownloadState, generation: Long) {
         if (!isCurrentBackgroundDownload(generation)) return
         var download = initial
-        publishDownloadStatus(download, generation)
+        val startedAt = SystemClock.elapsedRealtime()
+        val startingBytes = download.bytesDownloaded
+        publishDownloadStatus(download, generation, elapsedMillis = 0L, etaMillis = null)
         while (download.isActive) {
             delay(BACKGROUND_DOWNLOAD_POLL_INTERVAL_MILLIS)
             val refreshed = modelDownload.refresh() ?: break
             if (!isCurrentBackgroundDownload(generation)) return
             download = refreshed
-            publishDownloadStatus(download, generation)
+            val elapsed = SystemClock.elapsedRealtime() - startedAt
+            publishDownloadStatus(
+                download,
+                generation,
+                elapsedMillis = elapsed,
+                etaMillis = estimateRemainingMillis(download, startingBytes, elapsed),
+            )
         }
         if (download.isInstalled && isCurrentBackgroundDownload(generation)) initialize(generation)
     }
 
-    private fun publishDownloadStatus(download: BackgroundModelDownloadState, generation: Long) {
+    private fun publishDownloadStatus(
+        download: BackgroundModelDownloadState,
+        generation: Long,
+        elapsedMillis: Long,
+        etaMillis: Long?,
+    ) {
         runForCurrentBackgroundDownload(generation) {
             _uiState.update {
                 when {
                     download.isActive -> it.copy(
                         status = ModelStatus.DOWNLOADING,
-                        message = "Model download in progress",
+                        message = download.statusMessage,
                         backgroundDownload = download,
+                        downloadElapsedMillis = elapsedMillis,
+                        downloadEtaMillis = etaMillis,
                     )
                     download.isInstalled -> it.copy(
                         status = ModelStatus.INITIALIZING,
                         message = "Initializing model…",
                         backgroundDownload = download,
+                        initializationProgress = 0f,
                     )
                     else -> it.copy(
                         status = ModelStatus.FAILURE,
@@ -170,6 +205,18 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         }
+    }
+
+    private fun estimateRemainingMillis(
+        download: BackgroundModelDownloadState,
+        startingBytes: Long,
+        elapsedMillis: Long,
+    ): Long? {
+        val totalBytes = download.totalBytes?.takeIf { it > 0L } ?: return null
+        val transferred = download.bytesDownloaded - startingBytes
+        val remaining = totalBytes - download.bytesDownloaded
+        if (elapsedMillis <= 0L || transferred <= 0L || remaining <= 0L) return null
+        return (remaining.toDouble() * elapsedMillis / transferred).toLong().coerceAtLeast(0L)
     }
 
     /** Releases the foreground model before SDK-managed artifacts are removed. */
@@ -200,6 +247,7 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
                                 status = ModelStatus.AWAITING_CONSENT,
                                 message = "Downloaded model removed. Downloading it again requires your consent.",
                                 backgroundDownload = null,
+                                modelStorageMessage = "The downloaded model was removed. Downloading it again will require your approval.",
                             )
                         }
                     }
@@ -233,7 +281,7 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
     fun selectImage(uri: Uri) {
         if (_uiState.value.status == ModelStatus.GENERATING || imageUpdateInProgress) return
         imageUpdateInProgress = true
-        _uiState.update { it.copy(imageUpdating = true) }
+        _uiState.update { it.copy(imageUpdating = true, imageError = null) }
         engineWork.launch {
             runCatching { ImageDecoder.decode(getApplication<Application>().contentResolver, uri) }
                 .onSuccess { decoded ->
@@ -244,7 +292,9 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 .onFailure { error ->
                     imageUpdateInProgress = false
-                    if (error !is CancellationException) fail(error)
+                    if (error !is CancellationException) {
+                        _uiState.update(VisionUiState::withImageDecodeFailure)
+                    }
                 }
         }
     }
@@ -302,12 +352,19 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
             runCatching {
                 engine.initialize(BuildConfig.ZETIC_PERSONAL_KEY, modelProgress@{ progress ->
                     runForCurrentBackgroundDownload(generation) {
-                        _uiState.update { it.copy(status = ModelStatus.INITIALIZING, message = "Initializing — preparing model ${(progress * 100).toInt()}%") }
+                        val boundedProgress = progress.coerceIn(0f, 1f)
+                        _uiState.update {
+                            it.copy(
+                                status = ModelStatus.INITIALIZING,
+                                message = "Initializing — preparing model ${(boundedProgress * 100).toInt()}%",
+                                initializationProgress = boundedProgress,
+                            )
+                        }
                     }
                 })
             }.onSuccess {
                 runForCurrentBackgroundDownload(generation) {
-                    _uiState.update { it.copy(status = ModelStatus.READY, message = "Ready") }
+                    _uiState.update { it.copy(status = ModelStatus.READY, message = "Ready", initializationProgress = null) }
                 }
             }.onFailure { error ->
                 if (error !is CancellationException) runForCurrentBackgroundDownload(generation) { fail(error) }
