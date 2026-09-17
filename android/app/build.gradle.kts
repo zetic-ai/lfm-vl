@@ -33,6 +33,12 @@ android {
         buildConfigField("String", "ZETIC_PERSONAL_KEY", "\"${usablePersonalKey.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     buildFeatures { compose = true; buildConfig = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
     compileOptions {
