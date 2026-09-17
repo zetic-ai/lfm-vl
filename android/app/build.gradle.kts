@@ -54,7 +54,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("com.zeticai.mlange:mlange:0.0.0-internal.4d3e4535")
+    implementation("com.zeticai.mlange:mlange:0.0.0-internal.9b6b127e")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
