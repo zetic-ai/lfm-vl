@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A9E100000000000000000001 /* SessionHistory in Frameworks */ = {isa = PBXBuildFile; productRef = A9E100000000000000000002 /* SessionHistory */; };
 		16555B622E1286920003EA27 /* ZeticMLange in Frameworks */ = {isa = PBXBuildFile; productRef = 16555B612E1286920003EA27 /* ZeticMLange */; };
 /* End PBXBuildFile section */
 
@@ -43,6 +44,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				16555B622E1286920003EA27 /* ZeticMLange in Frameworks */,
+				A9E100000000000000000001 /* SessionHistory in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,6 +98,7 @@
 			name = ZeticMLangeLLMSample;
 			packageProductDependencies = (
 				16555B612E1286920003EA27 /* ZeticMLange */,
+				A9E100000000000000000002 /* SessionHistory */,
 			);
 			productName = ZeticMLangeLLMSample;
 			productReference = 16B8E4CA2E12859D00CF0875 /* ZeticMLangeLLMSample.app */;
@@ -127,6 +130,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				16555B602E1286920003EA27 /* XCRemoteSwiftPackageReference "mlange_sdk" */,
+				A9E100000000000000000003 /* XCLocalSwiftPackageReference "Packages/SessionHistory" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 16B8E4CB2E12859D00CF0875 /* Products */;
@@ -366,7 +370,19 @@
 		};
 /* End XCRemoteSwiftPackageReference section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		A9E100000000000000000003 /* XCLocalSwiftPackageReference "Packages/SessionHistory" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/SessionHistory;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
+		A9E100000000000000000002 /* SessionHistory */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A9E100000000000000000003 /* XCLocalSwiftPackageReference "Packages/SessionHistory" */;
+			productName = SessionHistory;
+		};
 		16555B612E1286920003EA27 /* ZeticMLange */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 16555B602E1286920003EA27 /* XCRemoteSwiftPackageReference "mlange_sdk" */;

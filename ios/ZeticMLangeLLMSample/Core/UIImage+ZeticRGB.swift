@@ -1,5 +1,6 @@
 import UIKit
 import ZeticMLange
+import SessionHistory
 
 enum ImageConversionError: LocalizedError {
     case noCGImage
@@ -16,6 +17,14 @@ enum ImageConversionError: LocalizedError {
 }
 
 extension UIImage {
+    func sessionArchivePhoto() throws -> SessionPhoto {
+        guard let photo = try resizedUpright(maxDimension: 2048).jpegData(compressionQuality: 0.88),
+              let thumbnail = try resizedUpright(maxDimension: 160).jpegData(compressionQuality: 0.75) else {
+            throw ImageConversionError.drawFailed
+        }
+        return SessionPhoto(image: photo, thumbnail: thumbnail)
+    }
+
     /// Converts to the packed 24-bit RGB buffer the model expects.
     ///
     /// Camera photos carry their rotation in `imageOrientation` rather than in the

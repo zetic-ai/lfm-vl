@@ -9,7 +9,7 @@
     <key>CFBundleIdentifier</key>
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleDisplayName</key>
-    <string>Zetic Lens</string>
+    <string>Aperçu</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -23,15 +23,21 @@
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSCameraUsageDescription</key>
-    <string>Take a photo to ask the on-device AI about it.</string>
+    <string>Prendre une photo pour poser une question à votre assistant visuel.</string>
     <key>NSPhotoLibraryUsageDescription</key>
-    <string>Choose a photo to ask the on-device AI about it.</string>
+    <string>Choisir une photo pour poser une question à votre assistant visuel.</string>
+    <key>UIAppFonts</key>
+    <array>
+        <string>bouygues-speak.ttf</string>
+        <string>bouygues-read-regular.ttf</string>
+        <string>bouygues-read-medium.ttf</string>
+    </array>
     <key>PERSONAL_KEY</key>
     <string>$(PERSONAL_KEY)</string>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
-        <true/>
+        <false/>
     </dict>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>

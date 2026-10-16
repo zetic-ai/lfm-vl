@@ -1,5 +1,6 @@
 import Foundation
 import ZeticMLange
+import SessionHistory
 
 /// Owns the on-device model.
 ///
@@ -11,6 +12,7 @@ actor VisionEngine {
 
     /// Identity of the image whose tokens are currently in the model's context.
     private var contextImageID: UUID?
+    private var estimatedContextTokens = 0
 
     var isLoaded: Bool { model != nil }
 
@@ -28,29 +30,45 @@ actor VisionEngine {
     func answer(
         question: String,
         image: ZeticMLangeLLMModel.Image,
-        imageID: UUID
+        imageID: UUID,
+        history: [VisionTurn] = [],
+        restoreContext: Bool = false
     ) async throws -> AsyncThrowingStream<String, Error> {
         guard let model else { throw VisionEngineError.notLoaded }
 
-        switch contextImageID {
-        case nil, imageID:
-            break
-        default:
-            try clearContext(on: model)
+        let questionTokens = try model.tokenize(question, parseSpecial: false).count
+        guard questionTokens <= 256 else { throw VisionEngineError.questionTooLong }
+        let rebuild = restoreContext || contextImageID != imageID || estimatedContextTokens + questionTokens > 640
+        var prompt = question
+        if rebuild {
+            if contextImageID != nil { try clearContext(on: model) }
+            prompt = try ConversationContext.restoredQuestion(
+                question, turns: history, historyTokenBudget: min(192, max(0, 384 - questionTokens)),
+                tokenCount: { try model.tokenize($0, parseSpecial: false).count }
+            )
+            // Conservative headroom for image tokens and the next answer.
+            estimatedContextTokens = 256
         }
         contextImageID = imageID
+        estimatedContextTokens += try model.tokenize(prompt, parseSpecial: false).count
 
         return try model.respond(
             systemPrompt: Constants.Prompt.system,
-            userText: question,
+            userText: prompt,
             image: image
         )
+    }
+
+    func recordCompletion(_ answer: String, imageID: UUID) {
+        guard contextImageID == imageID, let model else { return }
+        estimatedContextTokens += (try? model.tokenize(answer, parseSpecial: false).count) ?? answer.count
     }
 
     func close() {
         model?.close()
         model = nil
         contextImageID = nil
+        estimatedContextTokens = 0
     }
 
     // MARK: - Context
@@ -88,12 +106,15 @@ actor VisionEngine {
 enum VisionEngineError: LocalizedError {
     case notLoaded
     case missingPersonalAccessKey
+    case questionTooLong
     case contextResetFailed(underlying: Error)
 
     var errorDescription: String? {
         switch self {
         case .notLoaded:
-            return "The model is not loaded yet."
+            return "Le modèle n’est pas encore prêt."
+        case .questionTooLong:
+            return "Cette question est trop longue. Essayez une formulation plus courte."
         case .missingPersonalAccessKey:
             return "Set ZETIC_PERSONAL_KEY in .env and run scripts/generate-secrets-xcconfig.sh before building."
         case .contextResetFailed(let underlying):
