@@ -84,10 +84,14 @@ swift test --package-path ios/Packages/SessionHistory
 
 The native UI also builds for Simulator. For interface-only inspection without
 credentials or a model download, launch a Debug build with `-apercu-ui-testing`.
-It seeds synthetic photo/chat fixtures in a separate `ApercuUITestSessions`
-archive and opens history. This flag and fixture code are absent in Release.
+It seeds a real gas-pipeline photo and illustrative dialogue in a separate `ApercuUITestSessions-GasPipe-v1`
+archive and opens history. This flag and fixture code are absent in Release. The photo is by Glen Dillon (CC BY 3.0); the source and license are linked below the demo photo and recorded in `Resources/DemoPhotoCredit.txt`. The dialogue is seeded text, not model output.
 It does not validate inference or context replay on a physical device.
 
 Before release, check a real first question and follow-up, switch photos, stop an
 answer, relaunch, review and continue an older session, and remove/re-download the
 model while preserving history. Also check Dynamic Type and dark appearance.
+
+## Native design adaptation
+
+[Trilogy typography](https://design.bouyguestelecom.fr/foundations/typography) uses Bouygues Speak for headings and Read for body text. Native Dynamic Type remains enabled. [Spacing](https://design.bouyguestelecom.fr/foundations/spacings) follows 8-point steps and 4-point compact increments: 16-point screen/bubble padding, 8-point control corners, and 48-point functional actions. Primary actions are navy; secondary actions are white with an outline. AI replies are white outlined bubbles on the left; questions are tinted bubbles on the right. Native icons, photo selection and system dialogs remain platform components. Dark colors and the small yellow wordmark accent are app adaptations, not published Trilogy tokens.

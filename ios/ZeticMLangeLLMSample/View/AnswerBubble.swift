@@ -8,9 +8,21 @@ struct AnswerBubble: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(turn.question).font(LfmPalette.body(14))
-                .padding(12).background(LfmPalette.surfaceSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(16).background(LfmPalette.surfaceSubtle)
+                .clipShape(RoundedRectangle(cornerRadius: LfmLayout.bubbleRadius))
+                .padding(.leading, 32)
                 .frame(maxWidth: .infinity, alignment: .trailing)
+            HStack(alignment: .top, spacing: 0) {
+                answer
+                Spacer(minLength: 24)
+            }
+        }.foregroundStyle(LfmPalette.ink).padding(.vertical, 4)
+    }
+
+    private var answer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Assistant", systemImage: "sparkles")
+                .font(LfmPalette.medium(11)).foregroundStyle(LfmPalette.secondary)
             if !turn.answer.isEmpty {
                 Text(turn.answer).font(LfmPalette.body()).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -45,6 +57,12 @@ struct AnswerBubble: View {
                     }
                 }.foregroundStyle(LfmPalette.secondary)
             }
-        }.foregroundStyle(LfmPalette.ink).padding(.vertical, 4)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(LfmPalette.surface, in: RoundedRectangle(cornerRadius: LfmLayout.bubbleRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: LfmLayout.bubbleRadius).stroke(LfmPalette.divider, lineWidth: 1)
+        }
     }
 }

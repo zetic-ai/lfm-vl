@@ -2,11 +2,11 @@ import SwiftUI
 
 struct ApercuWordmark: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
             Text("Aperçu")
-                .font(LfmPalette.title(27))
+                .font(LfmPalette.title(24))
                 .overlay(alignment: .bottomTrailing) {
-                    Rectangle().fill(LfmPalette.highlight).frame(width: 26, height: 3).offset(y: 1)
+                    Rectangle().fill(LfmPalette.highlight).frame(width: 24, height: 4)
                         .accessibilityHidden(true)
                 }
             Text("Assistant visuel").font(LfmPalette.body(11)).foregroundStyle(LfmPalette.secondary)
@@ -20,11 +20,11 @@ struct ZeticFooter: View {
     var body: some View {
         HStack(spacing: 8) {
             Text("Propulsé par").font(LfmPalette.body(11)).foregroundStyle(LfmPalette.secondary)
-            Image("ZeticLogo").resizable().scaledToFit().frame(width: 86, height: 28)
-                .padding(2).background(.white, in: RoundedRectangle(cornerRadius: 2))
+            Image("ZeticLogo").resizable().scaledToFit().frame(width: 88, height: 28)
+                .padding(4).background(.white, in: RoundedRectangle(cornerRadius: 2))
                 .accessibilityLabel("ZETIC")
         }
-        .frame(maxWidth: .infinity, minHeight: 42)
+        .frame(maxWidth: .infinity, minHeight: 48)
         .background(LfmPalette.surface)
     }
 }
@@ -35,19 +35,23 @@ struct ApercuActionStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(LfmPalette.medium(15))
-            .frame(maxWidth: .infinity, minHeight: 24)
-            .padding(12)
+            .font(LfmPalette.medium())
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: LfmLayout.actionHeight)
             .foregroundStyle(primary && enabled ? LfmPalette.onAccent : LfmPalette.ink)
-            .background(primary && enabled ? LfmPalette.accent : LfmPalette.surfaceSubtle)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .background(primary && enabled ? LfmPalette.accent : enabled ? LfmPalette.surface : LfmPalette.surfaceSubtle)
+            .clipShape(RoundedRectangle(cornerRadius: LfmLayout.controlRadius))
+            .overlay(RoundedRectangle(cornerRadius: LfmLayout.controlRadius)
+                .stroke(primary ? .clear : LfmPalette.divider, lineWidth: 1))
             .opacity(!enabled ? 0.5 : configuration.isPressed ? 0.8 : 1)
     }
 }
 
 struct ApercuIconStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 19)).frame(minWidth: 44, minHeight: 44)
+        configuration.label.font(.system(size: 19)).frame(minWidth: LfmLayout.actionHeight, minHeight: LfmLayout.actionHeight)
             .contentShape(Rectangle()).opacity(configuration.isPressed ? 0.6 : 1)
     }
 }

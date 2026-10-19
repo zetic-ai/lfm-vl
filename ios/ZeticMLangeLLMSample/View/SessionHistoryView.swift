@@ -46,13 +46,13 @@ struct SessionHistoryView: View {
                     Label("Certaines sessions ne peuvent pas être lues. Leurs fichiers ont été conservés.", systemImage: "exclamationmark.triangle")
                         .font(LfmPalette.body(13)).foregroundStyle(LfmPalette.error)
                 }
-                LocalSessionNote().padding(.top, 20)
+                LocalSessionNote().padding(.top, 24)
                 if !store.sessions.isEmpty || store.unreadableCount > 0 {
                     Button(role: .destructive) { confirmClear = true } label: {
                         Label("Effacer l’historique", systemImage: "trash").frame(minHeight: 44)
                     }.font(LfmPalette.body(13)).disabled(!chat.canLeaveSession)
                 }
-            }.padding(20).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
+            }.padding(LfmLayout.screen).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
         }
         .background(LfmPalette.background)
         .confirmationDialog("Effacer l’historique ?", isPresented: $confirmClear, titleVisibility: .visible) {
@@ -86,7 +86,7 @@ private struct SessionHistoryRow: View {
             Group {
                 if let image { Image(uiImage: image).resizable().scaledToFill() }
                 else { Image(systemName: "photo").frame(maxWidth: .infinity, maxHeight: .infinity).background(LfmPalette.surfaceSubtle) }
-            }.frame(width: 64, height: 64).clipped().clipShape(RoundedRectangle(cornerRadius: 8))
+            }.frame(width: 64, height: 64).clipped().clipShape(RoundedRectangle(cornerRadius: LfmLayout.controlRadius))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.title).font(LfmPalette.medium(14)).lineLimit(2)
@@ -131,16 +131,25 @@ struct SessionReviewView: View {
                                     .background(LfmPalette.surfaceSubtle).clipShape(RoundedRectangle(cornerRadius: 12))
                                     .overlay(alignment: .topTrailing) {
                                         Image(systemName: "arrow.up.left.and.arrow.down.right")
-                                            .padding(12).background(LfmPalette.surface, in: RoundedRectangle(cornerRadius: 8)).padding(8)
+                                            .padding(12).background(LfmPalette.surface, in: RoundedRectangle(cornerRadius: LfmLayout.controlRadius)).padding(8)
                                     }
                             }.buttonStyle(.plain).accessibilityLabel("Agrandir la photo")
+                            #if DEBUG
+                            if ProcessInfo.processInfo.arguments.contains("-apercu-ui-testing") {
+                                HStack(spacing: 4) {
+                                    Link("Photo : Glen Dillon", destination: URL(string: "https://commons.wikimedia.org/wiki/File:MainLineValve7.jpg")!)
+                                    Text("·")
+                                    Link("CC BY 3.0", destination: URL(string: "https://creativecommons.org/licenses/by/3.0/")!)
+                                }.font(LfmPalette.body(10)).foregroundStyle(LfmPalette.secondary)
+                            }
+                            #endif
                         } else {
                             Label("Photo indisponible", systemImage: "photo").foregroundStyle(LfmPalette.secondary)
                         }
                         ForEach(session.turns) { turn in
                             AnswerBubble(turn: turn, isLast: false, onRegenerate: {})
                         }
-                    }.padding(20).frame(maxWidth: 640).frame(maxWidth: .infinity)
+                    }.padding(LfmLayout.screen).frame(maxWidth: 640).frame(maxWidth: .infinity)
                 }
             } else {
                 ContentUnavailableView("Session indisponible", systemImage: "clock.arrow.circlepath")
@@ -158,7 +167,7 @@ struct SessionReviewView: View {
                         Text("Terminez ou arrêtez la réponse en cours, puis enregistrez-la avant de continuer une autre session.")
                             .font(LfmPalette.body(12)).foregroundStyle(LfmPalette.secondary)
                     }
-                }.padding(.horizontal, 20).padding(.vertical, 12).background(LfmPalette.surface)
+                }.padding(.horizontal, LfmLayout.screen).padding(.vertical, 12).background(LfmPalette.surface)
             }
         }
         .toolbar {
