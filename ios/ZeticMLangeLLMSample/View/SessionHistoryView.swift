@@ -171,6 +171,11 @@ struct SessionReviewView: View {
             }
         }
         .toolbar {
+            if let session {
+                ToolbarItem(placement: .topBarTrailing) {
+                    SessionShareButton(session: session, photo: { try await store.repository.photo(for: id) }, enabled: canModify)
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Supprimer cette session", systemImage: "trash", role: .destructive) { confirmDelete = true }
                     .disabled(!canModify)

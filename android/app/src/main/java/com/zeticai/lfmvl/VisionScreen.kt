@@ -3,6 +3,10 @@ package com.zeticai.lfmvl.android
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.rememberCoroutineScope
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
@@ -106,6 +110,9 @@ fun VisionScreen(viewModel: VisionViewModel) {
     val context = LocalContext.current
     var replacementUri by remember { mutableStateOf<Uri?>(null) }
     var zoom by remember { mutableStateOf(false) }
+    val exportScope = rememberCoroutineScope()
+    var exporting by remember { mutableStateOf(false) }
+    var exportFailure by remember { mutableStateOf<String?>(null) }
     var settingsOpen by remember { mutableStateOf(false) }
     var removalConfirmationOpen by remember { mutableStateOf(false) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -129,9 +136,32 @@ fun VisionScreen(viewModel: VisionViewModel) {
         onDeferModelDownload = viewModel::deferModelDownload,
         onShowModelDownloadConsent = viewModel::showModelDownloadConsent,
         onOpenSettings = { settingsOpen = true },
+        canExport = !exporting && state.preview != null && state.hasTranscript && !state.imageUpdating && state.status != ModelStatus.GENERATING,
+        onExport = {
+            val snapshot = state
+            exporting = true
+            exportScope.launch {
+                try {
+                    val file = withContext(Dispatchers.IO) { SessionPdf.write(snapshot, File(context.cacheDir, "session-exports")) }
+                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/pdf"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        clipData = ClipData.newUri(context.contentResolver, "Session PDF", uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(send, "Share session PDF"))
+                } catch (error: Exception) { exportFailure = error.message ?: "Could not export this session." }
+                finally { exporting = false }
+            }
+        },
         cameraAvailable = cameraAvailable(context),
     )
 
+    exportFailure?.let { failure ->
+        AlertDialog(onDismissRequest = { exportFailure = null }, title = { Text("Could not export session") },
+            text = { Text(failure) }, confirmButton = { TextButton(onClick = { exportFailure = null }) { Text("OK") } })
+    }
     replacementUri?.let { candidate ->
         AlertDialog(
             onDismissRequest = { replacementUri = null },
@@ -202,6 +232,8 @@ internal fun VisionContent(
     onDeferModelDownload: () -> Unit = {},
     onShowModelDownloadConsent: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    canExport: Boolean = false,
+    onExport: () -> Unit = {},
     cameraAvailable: Boolean = true,
 ) {
     LfmVisionTheme {
@@ -211,6 +243,9 @@ internal fun VisionContent(
                 TopAppBar(
                     title = { Text("Ask about a photo") },
                     actions = {
+                        IconButton(onClick = onExport, enabled = canExport) {
+                            Icon(AppIcons.Share, contentDescription = "Share session PDF")
+                        }
                         IconButton(onClick = onOpenSettings) {
                             Icon(AppIcons.More, contentDescription = "Model settings")
                         }
@@ -641,7 +676,10 @@ private fun TurnBubbles(turn: VisionTurn, isLast: Boolean, regenerate: () -> Uni
                 }
             }
         }
-        if (turn.phase == TurnPhase.FINISHED && turn.answer.isNotBlank()) {
+        if (turn.phase == TurnPhase.INTERRUPTED) {
+            Text("Response interrupted", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+        }
+        if (turn.phase in setOf(TurnPhase.FINISHED, TurnPhase.INTERRUPTED) && turn.answer.isNotBlank()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth(0.85f)

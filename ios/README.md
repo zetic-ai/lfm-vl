@@ -76,7 +76,7 @@ later launches resume only that versioned approval.
 
 ## Validation
 
-The Foundation-only archive and context tests run without the MLange SDK:
+The archive, instruction and native PDF tests run on macOS without the MLange SDK:
 
 ```sh
 swift test --package-path ios/Packages/SessionHistory
@@ -99,3 +99,7 @@ model while preserving history. Also check Dynamic Type and dark appearance.
 ## AI instructions
 
 Menu → Paramètres provides an editable instruction, save action and default reset. Changes apply to new photo conversations. Existing conversations retain their captured instructions, including after reopening or regenerating an answer. Legacy archives retain the original default. See [instruction behavior and validation boundaries](../docs/ai-instructions.md).
+
+## Full-session PDF sharing
+
+Use the share control on a current conversation or saved-session review to export its photo, captured instructions and complete transcript as an A4 PDF. The system share sheet offers destinations such as Files or Mail; nothing is sent automatically. Export works for saved sessions without loading a model. See [export behavior and validation](../docs/session-export.md).

@@ -7,6 +7,7 @@ let package = Package(
     products: [.library(name: "SessionHistory", targets: ["SessionHistory"])],
     targets: [
         .target(name: "SessionHistory"),
+        .executableTarget(name: "ExportPreview", dependencies: ["SessionHistory"], path: "Preview"),
         .testTarget(name: "SessionHistoryTests", dependencies: ["SessionHistory"]),
     ]
 )
