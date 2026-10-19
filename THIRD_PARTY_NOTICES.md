@@ -22,3 +22,7 @@ the project files included in this release.
   internal names and copyright notices are retained. These assets remain subject
   to their owners’ terms and are not relicensed by this repository’s license.
 - The ZETIC footer uses the full existing ZETIC symbol and wordmark asset.
+
+## Demo photograph
+
+`MainLineValve7.jpg` is by Glen Dillon, licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), sourced from [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:MainLineValve7.jpg). The image is unmodified except for display/storage resizing. It is a demo fixture, not a customer site. Credit is visible in the debug review screen and bundled in `Resources/DemoPhotoCredit.txt`.

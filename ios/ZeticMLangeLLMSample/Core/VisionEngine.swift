@@ -36,21 +36,21 @@ actor VisionEngine {
     ) async throws -> AsyncThrowingStream<String, Error> {
         guard let model else { throw VisionEngineError.notLoaded }
 
-        let questionTokens = try model.tokenize(question, parseSpecial: false).count
+        let questionTokens = estimatedTokenCount(for: question)
         guard questionTokens <= 256 else { throw VisionEngineError.questionTooLong }
         let rebuild = restoreContext || contextImageID != imageID || estimatedContextTokens + questionTokens > 640
         var prompt = question
         if rebuild {
             if contextImageID != nil { try clearContext(on: model) }
-            prompt = try ConversationContext.restoredQuestion(
+            prompt = ConversationContext.restoredQuestion(
                 question, turns: history, historyTokenBudget: min(192, max(0, 384 - questionTokens)),
-                tokenCount: { try model.tokenize($0, parseSpecial: false).count }
+                tokenCount: { estimatedTokenCount(for: $0) }
             )
             // Conservative headroom for image tokens and the next answer.
             estimatedContextTokens = 256
         }
         contextImageID = imageID
-        estimatedContextTokens += try model.tokenize(prompt, parseSpecial: false).count
+        estimatedContextTokens += estimatedTokenCount(for: prompt)
 
         return try model.respond(
             systemPrompt: Constants.Prompt.system,
@@ -60,8 +60,8 @@ actor VisionEngine {
     }
 
     func recordCompletion(_ answer: String, imageID: UUID) {
-        guard contextImageID == imageID, let model else { return }
-        estimatedContextTokens += (try? model.tokenize(answer, parseSpecial: false).count) ?? answer.count
+        guard contextImageID == imageID, model != nil else { return }
+        estimatedContextTokens += estimatedTokenCount(for: answer)
     }
 
     func close() {
@@ -72,6 +72,12 @@ actor VisionEngine {
     }
 
     // MARK: - Context
+
+    /// SDK 1.11 does not expose a tokenizer; estimate about one token per three
+    /// UTF-8 bytes when applying the existing context budgets.
+    private func estimatedTokenCount(for text: String) -> Int {
+        (text.utf8.count + 2) / 3
+    }
 
     /// Clears model context before answering about a different image.
     private func clearContext(on model: ZeticMLangeLLMModel) throws {

@@ -1,0 +1,8 @@
+Demo photo: MainLineValve7.jpg
+Photographer: Glen Dillon
+Source: https://commons.wikimedia.org/wiki/File:MainLineValve7.jpg
+License: Creative Commons Attribution 3.0 Unported
+License URL: https://creativecommons.org/licenses/by/3.0/
+The source photograph is unchanged. The app may resize it for session storage and display.
+The pictured site is the Dampier to Bunbury Natural Gas Pipeline in Australia.
+Photo and dialogue are demo fixtures, not a customer site or model-inference result.

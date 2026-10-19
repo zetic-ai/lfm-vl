@@ -21,7 +21,7 @@ struct ContentView: View {
     init() {
         #if DEBUG
         let root = ProcessInfo.processInfo.arguments.contains("-apercu-ui-testing")
-            ? URL.applicationSupportDirectory.appendingPathComponent("ApercuUITestSessions") : nil
+            ? URL.applicationSupportDirectory.appendingPathComponent(UITestFixtures.archiveDirectoryName) : nil
         #else
         let root: URL? = nil
         #endif
@@ -131,7 +131,7 @@ struct ContentView: View {
                         ApercuMenuRow(title: "Modèle", subtitle: "Gérer le modèle téléchargé", symbol: "slider.horizontal.3") { path.append(.model) }
                     }
                     LocalSessionNote().padding(.top, 24)
-                }.padding(20).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
+                }.padding(LfmLayout.screen).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
             }.navigationTitle("Menu")
         case .history:
             SessionHistoryView(store: store, chat: chat, openSession: { path.append(.session($0)) }, newSession: newSession)
@@ -151,7 +151,7 @@ struct ContentView: View {
     private var chatScreen: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 24) {
                     if chat.hasUnsavedChanges && !chat.isGenerating {
                         Label("Cette session n’est pas encore enregistrée.", systemImage: "exclamationmark.triangle")
                             .font(LfmPalette.body(13)).foregroundStyle(LfmPalette.error)
@@ -188,7 +188,7 @@ struct ContentView: View {
                         }
                         LocalSessionNote().padding(.top, 32)
                     }
-                }.padding(20).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
+                }.padding(LfmLayout.screen).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
             }
             .onChange(of: chat.turns.count) { _, _ in
                 if let id = chat.turns.last?.id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
@@ -207,19 +207,19 @@ struct ContentView: View {
         .overlay(alignment: .topTrailing) {
             Button("Changer", systemImage: "arrow.triangle.2.circlepath") { chooseSource = true }
                 .font(LfmPalette.body(12)).padding(8).frame(minHeight: 44)
-                .background(LfmPalette.surface, in: RoundedRectangle(cornerRadius: 8)).padding(8)
+                .background(LfmPalette.surface, in: RoundedRectangle(cornerRadius: LfmLayout.controlRadius)).padding(8)
                 .disabled(!chat.canLeaveSession)
         }
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Votre question").font(LfmPalette.medium(12))
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Que voulez-vous savoir ?", text: $chat.question, axis: .vertical)
-                    .font(LfmPalette.body(16)).lineLimit(1...4).padding(10)
+                    .font(LfmPalette.body(16)).lineLimit(1...4).padding(12)
                     .background(LfmPalette.surface)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(LfmPalette.divider, lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: LfmLayout.controlRadius).stroke(LfmPalette.divider, lineWidth: 1))
                     .focused($questionFocused).submitLabel(.send)
                     .onSubmit { questionFocused = false; chat.ask() }
                     .accessibilityLabel("Votre question")
@@ -228,19 +228,19 @@ struct ContentView: View {
                     if chat.isGenerating { chat.cancelGeneration() } else { chat.ask() }
                 } label: {
                     Image(systemName: chat.isGenerating ? "stop.fill" : "arrow.up")
-                        .frame(width: 44, height: 44).background(LfmPalette.accent).foregroundStyle(LfmPalette.onAccent)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .frame(width: LfmLayout.actionHeight, height: LfmLayout.actionHeight).background(LfmPalette.accent).foregroundStyle(LfmPalette.onAccent)
+                        .clipShape(RoundedRectangle(cornerRadius: LfmLayout.controlRadius))
                 }
                 .disabled(!chat.isGenerating && !chat.canAsk)
                 .opacity(!chat.isGenerating && !chat.canAsk ? 0.5 : 1)
                 .accessibilityLabel(chat.isGenerating ? "Arrêter la réponse" : "Envoyer la question")
             }
-        }.padding(.horizontal, 20).padding(.vertical, 12).background(LfmPalette.surface)
+        }.padding(.horizontal, LfmLayout.screen).padding(.vertical, 12).background(LfmPalette.surface)
     }
 
     private var modelScreen: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 24) {
                 Text(download.canUseDownloadedModel ? "Votre assistant,\nsur cet iPhone." : "Première utilisation")
                     .font(LfmPalette.title())
                 if download.canUseDownloadedModel && chat.isModelReady {
@@ -265,7 +265,7 @@ struct ContentView: View {
                         .font(LfmPalette.body(13)).foregroundStyle(LfmPalette.secondary)
                 } else {
                     Text("Téléchargez le modèle pour commencer à utiliser Aperçu.").foregroundStyle(LfmPalette.secondary)
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 24) {
                         Label("1–2 Go de données et de stockage", systemImage: "internaldrive")
                         Label("Téléchargement en arrière-plan", systemImage: "iphone")
                     }.font(LfmPalette.body(14)).padding(16).frame(maxWidth: .infinity, alignment: .leading)
@@ -287,7 +287,7 @@ struct ContentView: View {
                         .disabled(download.isRemoving || !chat.canRemoveDownloadedModel)
                 }
                 LocalSessionNote().padding(.top, 24)
-            }.padding(20).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
+            }.padding(LfmLayout.screen).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
         }.background(LfmPalette.background)
     }
 
