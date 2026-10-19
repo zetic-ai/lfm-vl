@@ -39,3 +39,7 @@ launch resumes only that versioned approval.
 Settings → AI instructions lets users edit, save or restore the default. Changes apply to the next photo conversation; follow-ups and regeneration retain the current conversation’s snapshot. Settings persist locally across relaunches. The UI rejects blank text and instructions longer than 400 characters. See [the instruction contract](../docs/ai-instructions.md).
 
 The SDK resolves from the public GitHub release Ivy repository; no GitHub Packages credential is needed. Real-device instruction-following quality remains to be validated.
+
+## Full-session PDF sharing
+
+The share control beside Settings exports the current photo, captured instructions and complete conversation as a paginated PDF, then opens the Android chooser. The FileProvider grants read access only to the selected temporary PDF. Native PDF/provider instrumentation tests still need a device or emulator. See [export behavior](../docs/session-export.md).

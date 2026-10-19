@@ -40,6 +40,13 @@ struct ContentView: View {
                     .navigationTitle("Aperçu")
                     .apercuNavigation()
                     .toolbar {
+                        if let session = chat.session, let image = chat.image, !session.turns.isEmpty {
+                            ToolbarItem(placement: .topBarLeading) {
+                                SessionShareButton(session: session, photo: {
+                                    try await Task.detached { try image.sessionArchivePhoto().image }.value
+                                }, enabled: chat.canLeaveSession)
+                            }
+                        }
                         ToolbarItem(placement: .topBarTrailing) {
                             Button("Menu", systemImage: "line.3.horizontal") { path.append(.menu) }
                         }

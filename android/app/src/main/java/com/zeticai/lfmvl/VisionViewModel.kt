@@ -345,7 +345,7 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
             state.copy(
                 status = ModelStatus.READY,
                 message = "Ready",
-                turns = state.turns.map { if (it.isStreaming) it.copy(phase = TurnPhase.FINISHED) else it },
+                turns = state.turns.map { if (it.isStreaming) it.copy(phase = TurnPhase.INTERRUPTED) else it },
             )
         }
         engineWork.cancelActive()

@@ -1,6 +1,6 @@
 package com.zeticai.lfmvl.android
 
-enum class TurnPhase { READING, ANSWERING, FINISHED, FAILED }
+enum class TurnPhase { READING, ANSWERING, FINISHED, FAILED, INTERRUPTED }
 
 data class VisionTurn(
     val id: Long,
