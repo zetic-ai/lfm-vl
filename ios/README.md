@@ -95,3 +95,7 @@ model while preserving history. Also check Dynamic Type and dark appearance.
 ## Native design adaptation
 
 [Trilogy typography](https://design.bouyguestelecom.fr/foundations/typography) uses Bouygues Speak for headings and Read for body text. Native Dynamic Type remains enabled. [Spacing](https://design.bouyguestelecom.fr/foundations/spacings) follows 8-point steps and 4-point compact increments: 16-point screen/bubble padding, 8-point control corners, and 48-point functional actions. Primary actions are navy; secondary actions are white with an outline. AI replies are white outlined bubbles on the left; questions are tinted bubbles on the right. Native icons, photo selection and system dialogs remain platform components. Dark colors and the small yellow wordmark accent are app adaptations, not published Trilogy tokens.
+
+## AI instructions
+
+Menu → Paramètres provides an editable instruction, save action and default reset. Changes apply to new photo conversations. Existing conversations retain their captured instructions, including after reopening or regenerating an answer. Legacy archives retain the original default. See [instruction behavior and validation boundaries](../docs/ai-instructions.md).
