@@ -2,7 +2,8 @@ import PhotosUI
 import SwiftUI
 
 struct ContentView: View {
-    private enum Route: Hashable { case menu, history, session(UUID), model }
+    private enum Route: Hashable { case menu, history, session(UUID), model, settings }
+    @StateObject private var instructions: AIInstructionStore
     @StateObject private var store: SessionStore
     @StateObject private var chat: VisionChatViewModel
     @StateObject private var download = VisionModelDownloadCoordinator()
@@ -26,8 +27,10 @@ struct ContentView: View {
         let root: URL? = nil
         #endif
         let store = SessionStore(root: root)
+        let instructions = AIInstructionStore()
+        _instructions = StateObject(wrappedValue: instructions)
         _store = StateObject(wrappedValue: store)
-        _chat = StateObject(wrappedValue: VisionChatViewModel(store: store))
+        _chat = StateObject(wrappedValue: VisionChatViewModel(store: store, instructions: instructions))
     }
 
     var body: some View {
@@ -128,6 +131,7 @@ struct ContentView: View {
                         ApercuMenuRow(title: "Nouvelle session", subtitle: "Choisir une autre photo", symbol: "photo.badge.plus", action: newSession)
                             .disabled(!chat.canLeaveSession)
                         ApercuMenuRow(title: "Historique", subtitle: "Photos et conversations", symbol: "clock.arrow.circlepath") { path.append(.history) }
+                        ApercuMenuRow(title: "Paramètres", subtitle: "Personnaliser les instructions de l’IA", symbol: "gearshape") { path.append(.settings) }
                         ApercuMenuRow(title: "Modèle", subtitle: "Gérer le modèle téléchargé", symbol: "slider.horizontal.3") { path.append(.model) }
                     }
                     LocalSessionNote().padding(.top, 24)
@@ -143,6 +147,8 @@ struct ContentView: View {
                     if await chat.resume(saved) { path = [] }
                 }
             }.navigationTitle("Conversation")
+        case .settings:
+            AISettingsView(instructions: instructions)
         case .model:
             modelScreen.navigationTitle("Modèle")
         }

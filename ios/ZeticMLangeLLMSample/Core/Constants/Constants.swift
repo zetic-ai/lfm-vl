@@ -1,4 +1,5 @@
 import Foundation
+import SessionHistory
 
 struct Constants {
     struct MLANGE {
@@ -8,7 +9,7 @@ struct Constants {
     }
 
     struct Prompt {
-        static let system = "Tu es Aperçu, un assistant visuel concis. Réponds en français aux questions sur la photo fournie. Sois précis et factuel. Indique clairement lorsque la photo ne permet pas de répondre."
+        static let system = AIInstructions.defaultValue
         static let defaultQuestion = "Que voit-on sur cette photo ?"
 
         /// One-tap questions. Typing on a phone is the main cost of asking, so the
