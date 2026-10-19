@@ -2,7 +2,8 @@ import Foundation
 
 public enum ConversationContext {
     /// The archive retains every message. Replay only recent completed exchanges
-    /// that fit the token budget of the on-device runtime.
+    /// that fit the token budget of the on-device runtime, omitting an answer
+    /// when needed to retain its question.
     public static func restoredQuestion(
         _ question: String,
         turns: [VisionTurn],
@@ -11,9 +12,11 @@ public enum ConversationContext {
     ) rethrows -> String {
         var history = ""
         for turn in turns.reversed() where turn.phase == .finished && !turn.answer.isEmpty {
-            let entry = "Utilisateur : \(turn.question)\nAssistant : \(turn.answer)\n"
-            let candidate = entry + history
-            guard try tokenCount(candidate) <= historyTokenBudget else { break }
+            var candidate = "Utilisateur : \(turn.question)\nAssistant : \(turn.answer)\n" + history
+            if try tokenCount(candidate) > historyTokenBudget {
+                candidate = "Utilisateur : \(turn.question)\nAssistant : [réponse omise]\n" + history
+                guard try tokenCount(candidate) <= historyTokenBudget else { break }
+            }
             history = candidate
         }
         guard !history.isEmpty else { return question }
