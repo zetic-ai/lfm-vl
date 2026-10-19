@@ -152,6 +152,9 @@ final class SessionHistoryTests: XCTestCase {
             VisionTurn(question: "Q1", answer: "A1", phase: .finished),
             VisionTurn(question: "Q2", answer: "partial", phase: .interrupted),
             VisionTurn(question: "Q3", answer: "A3", phase: .finished),
+            VisionTurn(question: "Failed", answer: "failure", phase: .failed),
+            VisionTurn(question: "Streaming", answer: "stream", phase: .answering),
+            VisionTurn(question: "Empty", answer: "", phase: .finished),
         ]
         let prompt = ConversationContext.restoredQuestion("Q4", turns: turns, historyTokenBudget: 1000, tokenCount: { $0.count })
         XCTAssertTrue(prompt.contains("Q1"))
@@ -159,6 +162,9 @@ final class SessionHistoryTests: XCTestCase {
         XCTAssertTrue(prompt.hasSuffix("Q4"))
         XCTAssertFalse(prompt.contains("Q2"))
         XCTAssertFalse(prompt.contains("partial"))
+        XCTAssertFalse(prompt.contains("Failed"))
+        XCTAssertFalse(prompt.contains("Streaming"))
+        XCTAssertFalse(prompt.contains("Empty"))
         XCTAssertLessThan(prompt.range(of: "Q1")!.lowerBound, prompt.range(of: "Q3")!.lowerBound)
     }
 
@@ -170,6 +176,46 @@ final class SessionHistoryTests: XCTestCase {
         XCTAssertFalse(prompt.contains("OLD"))
         XCTAssertEqual(turns.count, 2)
         XCTAssertEqual(turns[0].answer, "Older answer")
+    }
+
+    func testResumeRetainsQuestionWhenItsAnswerExceedsBudget() throws {
+        let question = "Le code de cette session est LUNE42. Que vois-tu ?"
+        let answer = String(repeating: "Une longue description de la photo. ", count: 40)
+        let turns = [VisionTurn(question: question, answer: answer, phase: .finished)]
+        let history = "Utilisateur : \(question)\nAssistant : [réponse omise]\n"
+        let prompt = ConversationContext.restoredQuestion("Quel est le code ?", turns: turns, historyTokenBudget: 192,
+                                                          tokenCount: { ($0.utf8.count + 2) / 3 })
+        XCTAssertEqual(prompt, "Échanges précédents à propos de cette même photo :\n\(history)\nQuestion actuelle : Quel est le code ?")
+        XCTAssertEqual(turns[0].answer, answer)
+    }
+
+    func testResumeRetainsOriginalQuestionAfterLaterExchange() throws {
+        let turns = [
+            VisionTurn(question: "Le code est LUNE42. Que vois-tu ?",
+                       answer: String(repeating: "Une longue description. ", count: 60), phase: .finished),
+            VisionTurn(question: "Quel code ai-je mentionné ?", answer: "H09F", phase: .finished),
+        ]
+        let prompt = ConversationContext.restoredQuestion("Rappelle le code.", turns: turns, historyTokenBudget: 192,
+                                                          tokenCount: { ($0.utf8.count + 2) / 3 })
+        XCTAssertTrue(prompt.contains("LUNE42"))
+        XCTAssertTrue(prompt.contains("Assistant : [réponse omise]"))
+        XCTAssertTrue(prompt.contains("Assistant : H09F"))
+        let firstQuestion = try XCTUnwrap(prompt.range(of: "LUNE42"))
+        let laterQuestion = try XCTUnwrap(prompt.range(of: "Quel code"))
+        XCTAssertLessThan(firstQuestion.lowerBound, laterQuestion.lowerBound)
+        XCTAssertTrue(prompt.hasSuffix("Rappelle le code."))
+    }
+
+    func testResumeBudgetCountsOmissionMarkerAndPreservesUnicodeQuestion() throws {
+        let question = "코드는 달🌕42예요. 写真は何？"
+        let turns = [VisionTurn(question: question, answer: String(repeating: "é", count: 200), phase: .finished)]
+        let history = "Utilisateur : \(question)\nAssistant : [réponse omise]\n"
+        let budget = history.utf8.count
+        let prompt = ConversationContext.restoredQuestion("Suite ?", turns: turns, historyTokenBudget: budget,
+                                                          tokenCount: { $0.utf8.count })
+        XCTAssertEqual(prompt, "Échanges précédents à propos de cette même photo :\n\(history)\nQuestion actuelle : Suite ?")
+        XCTAssertEqual(ConversationContext.restoredQuestion("Suite ?", turns: turns, historyTokenBudget: budget - 1,
+                                                            tokenCount: { $0.utf8.count }), "Suite ?")
     }
 
     func testEmptyOrOverBudgetContextLeavesNewQuestionIntact() throws {
