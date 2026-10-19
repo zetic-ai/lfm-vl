@@ -1,230 +1,231 @@
 import SwiftUI
 import ZeticMLange
+import SessionHistory
 
 @MainActor
 final class VisionChatViewModel: ObservableObject {
-    enum LoadPhase {
-        case initializing
-        case downloading
-        case ready
-    }
+    enum LoadPhase { case initializing, downloading, ready }
 
     @Published private(set) var image: UIImage?
-    @Published var question: String = Constants.Prompt.defaultQuestion
-    @Published private(set) var turns: [VisionTurn] = []
-
+    @Published var question = ""
+    @Published private(set) var session: VisionSession?
     @Published private(set) var loadPhase: LoadPhase = .initializing
     @Published private(set) var downloadProgress: Float = 0
-    @Published private(set) var elapsedSeconds: Int = 0
-    @Published private(set) var estimatedSecondsRemaining: Int?
     @Published private(set) var isGenerating = false
     @Published private(set) var isLoadingModel = false
+    @Published private(set) var isRestoring = false
+    @Published private(set) var hasUnsavedChanges = false
     @Published var loadFailure: String?
 
     private let engine = VisionEngine()
+    private let store: SessionStore
     private var generationTask: Task<Void, Never>?
+    private var preparedPhoto: SessionPhoto?
+    private var photoSaved = false
+    private var savedRevision = 0
+    private var restoreContext = true
 
-    /// Identifies the current image so the engine knows when context must be cleared.
-    private var imageID = UUID()
+    init(store: SessionStore) { self.store = store }
 
-    private var loadStart: Date?
-    private var timerTask: Task<Void, Never>?
-
+    var turns: [VisionTurn] { session?.turns ?? [] }
     var isModelReady: Bool { loadPhase == .ready }
-
+    var canLeaveSession: Bool { !isGenerating && !isRestoring && !hasUnsavedChanges }
     var canAsk: Bool {
-        isModelReady
-            && !isGenerating
-            && image != nil
+        isModelReady && !isGenerating && !isRestoring && image != nil && store.isLoaded
             && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-
-    var hasTranscript: Bool { !turns.isEmpty }
-    var canRemoveDownloadedModel: Bool { !isGenerating && !isLoadingModel }
-
-    // MARK: - Model lifecycle
+    var canRemoveDownloadedModel: Bool { !isGenerating && !isLoadingModel && !isRestoring }
 
     func loadModel() async {
-        guard loadPhase != .ready, loadFailure == nil else { return }
+        guard loadPhase != .ready, !isLoadingModel, loadFailure == nil else { return }
         isLoadingModel = true
-        startLoadClock()
-        defer {
-            isLoadingModel = false
-            stopLoadClock()
-        }
-
+        defer { isLoadingModel = false }
         do {
-            try await engine.load { progress in
-                Task { @MainActor [weak self] in
-                    self?.recordProgress(progress)
+            try await engine.load { [weak self] progress in
+                Task { @MainActor in
+                    self?.downloadProgress = progress
+                    self?.loadPhase = progress >= 1 ? .initializing : .downloading
                 }
             }
             loadPhase = .ready
-        } catch {
-            loadFailure = error.localizedDescription
-        }
+        } catch { loadFailure = error.localizedDescription }
     }
 
     func retryLoad() {
         loadFailure = nil
         downloadProgress = 0
         loadPhase = .initializing
-        estimatedSecondsRemaining = nil
         Task { await loadModel() }
     }
 
-    private func recordProgress(_ progress: Float) {
-        downloadProgress = progress
-        loadPhase = progress >= 1.0 ? .initializing : .downloading
-
-        // ETA from the observed rate. The SDK reports a fraction only — there are no
-        // byte totals to show — so elapsed and projected time are the honest ceiling.
-        guard let loadStart, progress > 0.01, progress < 1.0 else {
-            estimatedSecondsRemaining = nil
-            return
-        }
-        let elapsed = Date().timeIntervalSince(loadStart)
-        let projectedTotal = elapsed / Double(progress)
-        estimatedSecondsRemaining = max(1, Int((projectedTotal - elapsed).rounded()))
+    @discardableResult
+    func select(_ newImage: UIImage) -> Bool {
+        guard canLeaveSession else { return false }
+        applyPhoto(newImage)
+        return true
     }
 
-    private func startLoadClock() {
-        loadStart = Date()
-        timerTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                guard let self, let start = self.loadStart else { return }
-                self.elapsedSeconds = Int(Date().timeIntervalSince(start))
-            }
-        }
+    func beginPhotoSelection() -> Bool {
+        guard canLeaveSession else { return false }
+        isRestoring = true
+        return true
     }
 
-    private func stopLoadClock() {
-        timerTask?.cancel()
-        timerTask = nil
+    func finishPhotoSelection(_ newImage: UIImage?) {
+        guard isRestoring else { return }
+        if let newImage { applyPhoto(newImage) }
+        isRestoring = false
     }
 
-    // MARK: - Image selection
-
-    /// Replaces the image and clears the transcript, which belonged to the old one.
-    ///
-    /// The new `imageID` is what tells the engine to clear the model's context
-    /// before the next answer.
-    func select(_ newImage: UIImage) {
-        cancelGeneration()
-
+    private func applyPhoto(_ newImage: UIImage) {
         image = newImage
-        imageID = UUID()
-        turns = []
-        question = Constants.Prompt.defaultQuestion
+        session = VisionSession()
+        question = ""
+        preparedPhoto = nil
+        photoSaved = false
+        savedRevision = 0
+        restoreContext = true
     }
 
-    // MARK: - Asking
+    @discardableResult
+    func newSession() -> Bool {
+        guard canLeaveSession else { return false }
+        image = nil
+        session = nil
+        question = ""
+        preparedPhoto = nil
+        photoSaved = false
+        savedRevision = 0
+        restoreContext = true
+        return true
+    }
+
+    func resume(_ saved: VisionSession) async -> Bool {
+        guard canLeaveSession else { return false }
+        isRestoring = true
+        defer { isRestoring = false }
+        do {
+            let photo = try await store.image(for: saved.id)
+            image = photo
+            session = saved
+            question = ""
+            preparedPhoto = nil
+            photoSaved = true
+            savedRevision = saved.revision
+            restoreContext = true
+            return true
+        } catch { store.failure = error.localizedDescription; return false }
+    }
 
     func ask(_ prompt: String? = nil) {
         if let prompt { question = prompt }
-        guard canAsk, let image else { return }
-
+        guard canAsk, let image, var active = session else { return }
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        let askedImageID = imageID
-
-        turns.append(VisionTurn(question: text))
-        question = Constants.Prompt.defaultQuestion
+        let history = active.turns
+        let turn = VisionTurn(question: text)
+        active.turns.append(turn)
+        active.didChange()
+        session = active
+        hasUnsavedChanges = true
+        question = ""
         isGenerating = true
+        let sessionID = active.id
+        let shouldRestore = restoreContext
 
         generationTask = Task { [weak self] in
             guard let self else { return }
             let started = Date()
-            var sawFirstToken = false
-
+            var checkpoint = Date()
+            defer { self.isGenerating = false; self.generationTask = nil }
             do {
-                // Conversion is CPU-bound on a full-resolution photo; keep it off main.
-                let rgb = try await Task.detached(priority: .userInitiated) {
-                    try image.zeticRGBImage()
-                }.value
-
-                let stream = try await self.engine.answer(
-                    question: text,
-                    image: rgb,
-                    imageID: askedImageID
-                )
-
-                for try await piece in stream {
-                    if Task.isCancelled { break }
-                    if !sawFirstToken {
-                        sawFirstToken = true
-                        self.markFirstToken(msSinceStart: Self.elapsedMs(since: started))
-                    }
-                    self.appendToLastTurn(piece)
+                if !self.photoSaved && self.preparedPhoto == nil {
+                    self.preparedPhoto = try await Task.detached(priority: .userInitiated) {
+                        try image.sessionArchivePhoto()
+                    }.value
                 }
-                self.finishLastTurn(durationMs: Self.elapsedMs(since: started))
+                // Persist the question and photo before starting the runtime.
+                guard await self.persistCurrent() else {
+                    self.update(turn.id) { $0.phase = .failed; $0.failure = "Enregistrement impossible. Réessayez avant de continuer." }
+                    return
+                }
+                try Task.checkCancellation()
+                let rgb = try await Task.detached(priority: .userInitiated) { try image.zeticRGBImage() }.value
+                try Task.checkCancellation()
+                let stream = try await self.engine.answer(
+                    question: text, image: rgb, imageID: sessionID,
+                    history: history, restoreContext: shouldRestore
+                )
+                for try await piece in stream {
+                    try Task.checkCancellation()
+                    self.update(turn.id) {
+                        if $0.firstTokenMs == nil { $0.firstTokenMs = Self.elapsed(since: started) }
+                        $0.phase = .answering
+                        $0.answer += piece
+                    }
+                    if Date().timeIntervalSince(checkpoint) >= 0.5 {
+                        _ = await self.persistCurrent()
+                        checkpoint = Date()
+                    }
+                }
+                try Task.checkCancellation()
+                self.update(turn.id) { $0.phase = .finished; $0.durationMs = Self.elapsed(since: started) }
+                await self.engine.recordCompletion(self.turns.last?.answer ?? "", imageID: sessionID)
+                self.restoreContext = false
             } catch is CancellationError {
-                self.finishLastTurn(durationMs: Self.elapsedMs(since: started))
+                self.update(turn.id) { $0.phase = .interrupted; $0.durationMs = Self.elapsed(since: started) }
+                self.restoreContext = true
             } catch {
-                self.failLastTurn(error.localizedDescription)
+                self.update(turn.id) { $0.phase = .failed; $0.failure = error.localizedDescription }
+                self.restoreContext = true
             }
-            self.isGenerating = false
-            self.generationTask = nil
+            _ = await self.persistCurrent()
         }
     }
 
-    /// Re-runs the most recent question.
     func regenerateLast() {
-        guard !isGenerating, let last = turns.last else { return }
-        turns.removeLast()
+        guard !isGenerating, let last = turns.last, session != nil else { return }
+        session?.turns.removeLast()
+        session?.didChange()
+        restoreContext = true
         ask(last.question)
     }
 
-    func cancelGeneration() {
-        generationTask?.cancel()
-        generationTask = nil
-        isGenerating = false
-        if let index = turns.indices.last, turns[index].isStreaming {
-            turns[index].phase = .finished
+    func cancelGeneration() { generationTask?.cancel() }
+
+    @discardableResult
+    func persistCurrent() async -> Bool {
+        guard let snapshot = session, !snapshot.turns.isEmpty else { return true }
+        guard photoSaved || preparedPhoto != nil else { return false }
+        let saved = await store.save(snapshot, photo: photoSaved ? nil : preparedPhoto)
+        guard session?.id == snapshot.id else { return saved }
+        if saved {
+            savedRevision = max(savedRevision, snapshot.revision)
+            photoSaved = true
+            preparedPhoto = nil
         }
+        hasUnsavedChanges = (session?.revision ?? 0) > savedRevision
+        return saved
     }
 
-    func cleanUp() {
-        cancelGeneration()
-        stopLoadClock()
-        Task { [engine] in await engine.close() }
+    func forgetDeletedSession(_ id: UUID) {
+        guard session?.id == id else { return }
+        _ = newSession()
     }
 
-    /// The caller checks this before presenting destructive confirmation, so a live answer is
-    /// never interrupted to remove model artifacts.
     func closeModelForRemoval() async -> Bool {
         guard canRemoveDownloadedModel else { return false }
         await engine.close()
+        restoreContext = true
         loadPhase = .initializing
         return true
     }
 
-    // MARK: - Transcript updates
-
-    private static func elapsedMs(since start: Date) -> Int {
-        Int(Date().timeIntervalSince(start) * 1000)
+    private func update(_ id: UUID, mutation: (inout VisionTurn) -> Void) {
+        guard let index = session?.turns.firstIndex(where: { $0.id == id }) else { return }
+        mutation(&session!.turns[index])
+        session?.didChange()
+        hasUnsavedChanges = true
     }
 
-    private func markFirstToken(msSinceStart: Int) {
-        guard let index = turns.indices.last else { return }
-        turns[index].firstTokenMs = msSinceStart
-        turns[index].phase = .answering
-    }
-
-    private func appendToLastTurn(_ piece: String) {
-        guard let index = turns.indices.last else { return }
-        turns[index].answer += piece
-    }
-
-    private func finishLastTurn(durationMs: Int) {
-        guard let index = turns.indices.last, turns[index].isStreaming else { return }
-        turns[index].durationMs = durationMs
-        turns[index].phase = .finished
-    }
-
-    private func failLastTurn(_ message: String) {
-        guard let index = turns.indices.last else { return }
-        turns[index].failure = message
-        turns[index].phase = .failed
-    }
+    private static func elapsed(since date: Date) -> Int { Int(Date().timeIntervalSince(date) * 1_000) }
 }

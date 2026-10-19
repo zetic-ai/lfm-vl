@@ -2,542 +2,321 @@ import PhotosUI
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var viewModel = VisionChatViewModel()
-    @StateObject private var modelDownload = VisionModelDownloadCoordinator()
+    private enum Route: Hashable { case menu, history, session(UUID), model }
+    @StateObject private var store: SessionStore
+    @StateObject private var chat: VisionChatViewModel
+    @StateObject private var download = VisionModelDownloadCoordinator()
     @StateObject private var network = NetworkPathObserver()
-
+    @State private var path: [Route] = []
     @State private var showCamera = false
+    @State private var showLibrary = false
+    @State private var chooseSource = false
     @State private var librarySelection: PhotosPickerItem?
-    @State private var pickerFailure: String?
-    @State private var showZoom = false
-    @State private var pendingReplacement: UIImage?
-    @State private var hasDeferredModelDownload = false
-    @State private var isRemoveDownloadedModelConfirmationPresented = false
-    @State private var modelRemovalMessage: String?
+    @State private var showPhoto = false
+    @State private var confirmRemoveModel = false
+    @State private var message: String?
     @FocusState private var questionFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    init() {
+        #if DEBUG
+        let root = ProcessInfo.processInfo.arguments.contains("-apercu-ui-testing")
+            ? URL.applicationSupportDirectory.appendingPathComponent("ApercuUITestSessions") : nil
+        #else
+        let root: URL? = nil
+        #endif
+        let store = SessionStore(root: root)
+        _store = StateObject(wrappedValue: store)
+        _chat = StateObject(wrappedValue: VisionChatViewModel(store: store))
+    }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if !modelDownload.hasDownloadConsent && !hasDeferredModelDownload {
-                    modelDownloadConsentView
-                } else if !modelDownload.hasDownloadConsent {
-                    modelNotDownloadedView
-                } else if let failure = modelDownload.failureMessage {
-                    backgroundDownloadFailureView(failure)
-                } else if modelDownload.isBackgroundDownloadInProgress {
-                    backgroundDownloadView
-                } else if let failure = viewModel.loadFailure {
-                    loadFailureView(failure)
-                } else if !viewModel.isModelReady {
-                    loadingView
-                } else {
-                    mainView
-                }
+        VStack(spacing: 0) {
+            NavigationStack(path: $path) {
+                home
+                    .navigationTitle("Aperçu")
+                    .apercuNavigation()
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Menu", systemImage: "line.3.horizontal") { path.append(.menu) }
+                        }
+                    }
+                    .navigationDestination(for: Route.self) { route in
+                        destination(route).apercuNavigation()
+                    }
             }
-            .navigationTitle("Ask about a photo")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { modelSettingsMenu }
+            ZeticFooter()
         }
         .tint(LfmPalette.accent)
+        .font(LfmPalette.body())
+        .foregroundStyle(LfmPalette.ink)
         .task {
-            modelDownload.resumeIfConsented()
-            await loadInstalledModelIfNeeded()
-        }
-        .onChange(of: modelDownload.phase) { _, phase in
-            guard phase == .installed else { return }
-            Task { await loadInstalledModelIfNeeded() }
-        }
-        .onDisappear { viewModel.cleanUp() }
-        .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { propose($0) }
-                .ignoresSafeArea()
-        }
-        .fullScreenCover(isPresented: $showZoom) {
-            if let image = viewModel.image {
-                ZoomableImageView(image: image)
-            }
-        }
-        .onChange(of: librarySelection) { _, item in
-            guard let item else { return }
-            Task { await loadFromLibrary(item) }
-        }
-        .alert("Could not load that photo", isPresented: alertBinding) {
-            Button("OK") { pickerFailure = nil }
-        } message: {
-            Text(pickerFailure ?? "")
-        }
-        .alert("Replace this photo?", isPresented: replacementBinding) {
-            Button("Replace", role: .destructive) {
-                if let pending = pendingReplacement { viewModel.select(pending) }
-                pendingReplacement = nil
-            }
-            Button("Keep current", role: .cancel) { pendingReplacement = nil }
-        } message: {
-            Text("The answers for the current photo will be cleared.")
-        }
-        .confirmationDialog(
-            "Remove downloaded model?",
-            isPresented: $isRemoveDownloadedModelConfirmationPresented,
-            titleVisibility: .visible
-        ) {
-            Button("Remove model", role: .destructive, action: removeDownloadedModel)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes only the downloaded vision model. Your photos and conversations stay on this phone.")
-        }
-        .alert("Model storage", isPresented: modelRemovalAlertBinding) {
-            Button("OK") { modelRemovalMessage = nil }
-        } message: {
-            Text(modelRemovalMessage ?? "")
-        }
-    }
-
-    /// A real binding — `.constant(...)` left the alert unable to clear its own state
-    /// when the system dismissed it.
-    private var alertBinding: Binding<Bool> {
-        Binding(get: { pickerFailure != nil }, set: { if !$0 { pickerFailure = nil } })
-    }
-
-    private var replacementBinding: Binding<Bool> {
-        Binding(get: { pendingReplacement != nil }, set: { if !$0 { pendingReplacement = nil } })
-    }
-
-    private var modelRemovalAlertBinding: Binding<Bool> {
-        Binding(get: { modelRemovalMessage != nil }, set: { if !$0 { modelRemovalMessage = nil } })
-    }
-
-    // MARK: - Load states
-
-    private var modelDownloadConsentView: some View {
-        ContentUnavailableView {
-            Label("Download the vision model?", systemImage: "arrow.down.circle")
-        } description: {
-            Text("The model is downloaded in the background after you agree. It may use 1–2 GB of data and storage, and stays only on this phone.")
-        } actions: {
-            Button("Download model") { modelDownload.recordConsent() }
-                .buttonStyle(.borderedProminent)
-            Button("Not now") { hasDeferredModelDownload = true }
-        }
-    }
-
-    private var modelNotDownloadedView: some View {
-        ContentUnavailableView {
-            Label("Vision model required", systemImage: "arrow.down.circle")
-        } description: {
-            Text("Download the on-device model when you are ready to ask about a photo.")
-        } actions: {
-            Button("Download model") { hasDeferredModelDownload = false }
-                .buttonStyle(.borderedProminent)
-        }
-    }
-
-    private var backgroundDownloadView: some View {
-        VStack(spacing: 18) {
-            if case let .downloading(progress) = modelDownload.phase, let progress {
-                ProgressView(value: progress, total: 1.0)
-                    .progressViewStyle(.linear)
-                    .frame(width: 260)
-            } else {
-                ProgressView()
-            }
-
-            VStack(spacing: 6) {
-                Text(modelDownload.phase.title)
-                    .font(.headline)
-                    .accessibilityIdentifier("background-model-download-headline")
-                if let detail = modelDownload.phase.detail {
-                    Text(detail)
-                        .font(.footnote)
-                        .foregroundStyle(LfmPalette.secondary)
-                        .accessibilityIdentifier("background-model-download-detail")
-                }
-            }
-
-            Text("You can keep this app open or leave it. Asking about a photo will be available when the download finishes.")
-                .font(.caption)
-                .foregroundStyle(LfmPalette.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 36)
-
-            if network.isExpensive || network.isConstrained {
-                Label(
-                    network.isConstrained
-                        ? "Low Data Mode is on — connect to Wi-Fi to avoid a slow or interrupted download."
-                        : "You're on cellular. This download is large — Wi-Fi is strongly recommended.",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .multilineTextAlignment(.leading)
-                .padding(12)
-                .background(Color.orange.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .padding(.horizontal, 28)
-            }
-        }
-        .padding()
-    }
-
-    private func backgroundDownloadFailureView(_ message: String) -> some View {
-        ContentUnavailableView {
-            Label("Model download unavailable", systemImage: "exclamationmark.triangle")
-        } description: {
-            Text(message)
-        } actions: {
-            Button("Try again") { modelDownload.retry() }
-                .buttonStyle(.borderedProminent)
-        }
-    }
-
-    private var loadingView: some View {
-        VStack(spacing: 18) {
-            if viewModel.loadPhase == .downloading {
-                ProgressView(value: viewModel.downloadProgress, total: 1.0)
-                    .progressViewStyle(.linear)
-                    .frame(width: 260)
-            } else {
-                ProgressView()
-            }
-
-            VStack(spacing: 6) {
-                Text(viewModel.loadPhase == .downloading
-                     ? "Downloading model — \(Int(viewModel.downloadProgress * 100))%"
-                     : "Initializing model…")
-                    .font(.headline)
-
-                Text(timingText)
-                    .font(.footnote)
-                    .foregroundStyle(LfmPalette.secondary)
-                    .monospacedDigit()
-            }
-
-            Text(viewModel.loadPhase == .downloading
-                 ? "The first run may download roughly 1–2 GB. Later launches reuse available SDK-managed model cache."
-                 : "Preparing the on-device model.")
-                .font(.caption)
-                .foregroundStyle(LfmPalette.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 36)
-
-            if viewModel.loadPhase == .downloading && (network.isExpensive || network.isConstrained) {
-                Label(
-                    network.isConstrained
-                        ? "Low Data Mode is on — connect to Wi-Fi to avoid a slow or interrupted download."
-                        : "You're on cellular. This download is large — Wi-Fi is strongly recommended.",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .multilineTextAlignment(.leading)
-                .padding(12)
-                .background(Color.orange.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .padding(.horizontal, 28)
-            }
-        }
-        .padding()
-    }
-
-    private var timingText: String {
-        let elapsed = "\(viewModel.elapsedSeconds / 60)m \(viewModel.elapsedSeconds % 60)s elapsed"
-        guard viewModel.loadPhase == .downloading, let remaining = viewModel.estimatedSecondsRemaining else {
-            return elapsed
-        }
-        return "\(elapsed) · about \(remaining / 60)m \(remaining % 60)s left"
-    }
-
-    private func loadFailureView(_ message: String) -> some View {
-        ContentUnavailableView {
-            Label("Model unavailable", systemImage: "exclamationmark.triangle")
-        } description: {
-            Text(message)
-        } actions: {
-            Button("Try again") { viewModel.retryLoad() }
-                .buttonStyle(.borderedProminent)
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var modelSettingsMenu: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Button("Remove downloaded model", role: .destructive, action: requestDownloadedModelRemoval)
-                    .disabled(!modelDownload.canRemoveDownloadedModel || modelDownload.isRemoving)
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-            .accessibilityLabel("Model settings")
-        }
-    }
-
-    private func loadInstalledModelIfNeeded() async {
-        guard modelDownload.canUseDownloadedModel else { return }
-        await viewModel.loadModel()
-    }
-
-    private func requestDownloadedModelRemoval() {
-        guard modelDownload.canRemoveDownloadedModel else {
-            modelRemovalMessage = "There is no downloaded model to remove."
-            return
-        }
-        guard modelDownload.isBackgroundDownloadInProgress || viewModel.canRemoveDownloadedModel else {
-            modelRemovalMessage = "Finish the current answer or model preparation before removing the downloaded model."
-            return
-        }
-        isRemoveDownloadedModelConfirmationPresented = true
-    }
-
-    private func removeDownloadedModel() {
-        Task {
-            if !modelDownload.isBackgroundDownloadInProgress,
-               !(await viewModel.closeModelForRemoval()) {
-                modelRemovalMessage = "Finish the current answer or model preparation before removing the downloaded model."
+            await store.load()
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-apercu-ui-testing") {
+                await UITestFixtures.seed(store)
+                path = [.menu, .history]
                 return
             }
-
-            switch await modelDownload.removeDownloadedModel() {
-            case .removed:
-                hasDeferredModelDownload = false
-                modelRemovalMessage = "The downloaded model was removed. Downloading it again will require your approval."
-            case .inUse:
-                modelRemovalMessage = "Finish the current answer before removing the downloaded model."
-            case let .failed(message):
-                modelRemovalMessage = message
-            }
+            #endif
+            download.resumeIfConsented()
+            await loadInstalledModel()
         }
-    }
-
-    // MARK: - Main
-
-    private var mainView: some View {
-        VStack(spacing: 0) {
-            imageSection
-            if viewModel.image != nil {
-                suggestionRow
-            }
-            Divider().overlay(LfmPalette.divider)
-            transcript
-            Divider().overlay(LfmPalette.divider)
-            composer
+        .onChange(of: download.phase) { _, phase in
+            if phase == .installed { Task { await loadInstalledModel() } }
         }
-        .background(LfmPalette.surface)
-    }
-
-    private var imageSection: some View {
-        Group {
-            if let image = viewModel.image {
-                VStack(spacing: 8) {
-                    Button {
-                        showZoom = true
-                    } label: {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 220)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { Task { _ = await chat.persistCurrent() } }
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { image in _ = chat.select(image) }.ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $showPhoto) {
+            if let image = chat.image { ZoomableImageView(image: image) }
+        }
+        .photosPicker(isPresented: $showLibrary, selection: $librarySelection, matching: .images)
+        .onChange(of: librarySelection) { _, item in
+            guard let item else { return }
+            guard chat.beginPhotoSelection() else { librarySelection = nil; return }
+            Task {
+                defer { chat.finishPhotoSelection(nil); librarySelection = nil }
+                do {
+                    guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else {
+                        message = "Cette photo ne peut pas être ouverte."
+                        return
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Selected photo. Double-tap to view full screen.")
-
-                    selectedImageControls
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-            } else {
-                VStack(spacing: 14) {
-                    Image(systemName: "photo.on.rectangle.angled")
-                        .font(.system(size: 44))
-                        .foregroundStyle(.tertiary)
-                    Text("Take a photo or choose one from your library.")
-                        .font(.footnote)
-                        .foregroundStyle(LfmPalette.secondary)
-                    sourceButtons
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 36)
+                    chat.finishPhotoSelection(image)
+                } catch { message = "Impossible d’ouvrir cette photo. \(error.localizedDescription)" }
             }
         }
-    }
-
-    private var sourceButtons: some View {
-        HStack(spacing: 10) {
-            if CameraPicker.isAvailable {
-                Button {
-                    showCamera = true
-                } label: {
-                    Label("Camera", systemImage: "camera.fill")
+        .confirmationDialog("Choisir une photo", isPresented: $chooseSource, titleVisibility: .visible) {
+            Button("Prendre une photo") { showCamera = true }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+            Button("Ouvrir la galerie") { showLibrary = true }
+            Button("Annuler", role: .cancel) {}
+        } message: { Text("Une nouvelle photo ouvre une nouvelle session. La conversation actuelle reste dans l’historique.") }
+        .confirmationDialog("Supprimer le modèle téléchargé ?", isPresented: $confirmRemoveModel, titleVisibility: .visible) {
+            Button("Supprimer le modèle", role: .destructive) { Task { await removeModel() } }
+            Button("Annuler", role: .cancel) {}
+        } message: { Text("Vos photos et conversations restent dans l’historique. Le modèle devra être téléchargé à nouveau pour poser une question.") }
+        .alert("Historique", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
+            Button("Réessayer") {
+                Task {
+                    if chat.hasUnsavedChanges { _ = await chat.persistCurrent() }
+                    else { await store.load() }
                 }
-                .buttonStyle(.borderedProminent)
-                .frame(minHeight: 44)
-                .fixedSize(horizontal: true, vertical: false)
-                .accessibilityIdentifier("camera_button")
             }
-
-            PhotosPicker(selection: $librarySelection, matching: .images, photoLibrary: .shared()) {
-                Label("Library", systemImage: "photo.fill")
-            }
-            .buttonStyle(.bordered)
-            .frame(minHeight: 44)
-            .fixedSize(horizontal: true, vertical: false)
-            .accessibilityIdentifier("library_button")
-        }
-        .labelStyle(.titleAndIcon)
-        .font(.footnote)
+            Button("Fermer", role: .cancel) {}
+        } message: { Text(store.failure ?? "") }
+        .alert("Aperçu", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+            Button("Fermer", role: .cancel) {}
+        } message: { Text(message ?? "") }
     }
 
-    /// Keep the camera and library controls at a 44 pt target instead of compressing their
-    /// labels after an image has been selected. Narrow layouts move the model note below them.
-    private var selectedImageControls: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                sourceButtons
-                Spacer(minLength: 8)
-                modelImageSizeLabel
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                sourceButtons
-                modelImageSizeLabel
-            }
-        }
+    @ViewBuilder private var home: some View {
+        if download.canUseDownloadedModel && chat.isModelReady { chatScreen }
+        else { modelScreen }
     }
 
-    private var modelImageSizeLabel: some View {
-        Text("Model sees \(Int(Constants.maxImageDimension)) px")
-            .font(.caption2)
-            .foregroundStyle(LfmPalette.secondary)
-            .fixedSize(horizontal: true, vertical: false)
-    }
-
-    /// One-tap questions — the keyboard is the slowest part of asking on a phone.
-    private var suggestionRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(Constants.Prompt.suggestions, id: \.self) { suggestion in
-                    Button {
-                        questionFocused = false
-                        viewModel.ask(suggestion)
-                    } label: {
-                        Text(suggestion)
-                            .font(.footnote)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(LfmPalette.surfaceSubtle)
-                            .clipShape(Capsule())
+    @ViewBuilder private func destination(_ route: Route) -> some View {
+        switch route {
+        case .menu:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Menu").font(LfmPalette.title())
+                    Text("Retrouvez vos conversations.").foregroundStyle(LfmPalette.secondary)
+                    VStack(spacing: 0) {
+                        ApercuMenuRow(title: "Nouvelle session", subtitle: "Choisir une autre photo", symbol: "photo.badge.plus", action: newSession)
+                            .disabled(!chat.canLeaveSession)
+                        ApercuMenuRow(title: "Historique", subtitle: "Photos et conversations", symbol: "clock.arrow.circlepath") { path.append(.history) }
+                        ApercuMenuRow(title: "Modèle", subtitle: "Gérer le modèle téléchargé", symbol: "slider.horizontal.3") { path.append(.model) }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(viewModel.isGenerating || !viewModel.isModelReady)
+                    LocalSessionNote().padding(.top, 24)
+                }.padding(20).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
+            }.navigationTitle("Menu")
+        case .history:
+            SessionHistoryView(store: store, chat: chat, openSession: { path.append(.session($0)) }, newSession: newSession)
+                .navigationTitle("Historique")
+        case let .session(id):
+            SessionReviewView(id: id, store: store, chat: chat) {
+                Task {
+                    guard let saved = store.sessions.first(where: { $0.id == id }) else { return }
+                    if await chat.resume(saved) { path = [] }
                 }
-            }
-            .padding(.horizontal, 16)
+            }.navigationTitle("Conversation")
+        case .model:
+            modelScreen.navigationTitle("Modèle")
         }
-        .padding(.vertical, 10)
     }
 
-    private var transcript: some View {
+    private var chatScreen: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(viewModel.turns.enumerated()), id: \.element.id) { index, turn in
-                        AnswerBubble(
-                            turn: turn,
-                            isLast: index == viewModel.turns.count - 1,
-                            onRegenerate: { viewModel.regenerateLast() }
-                        )
-                        .id(turn.id)
+                VStack(alignment: .leading, spacing: 20) {
+                    if chat.hasUnsavedChanges && !chat.isGenerating {
+                        Label("Cette session n’est pas encore enregistrée.", systemImage: "exclamationmark.triangle")
+                            .font(LfmPalette.body(13)).foregroundStyle(LfmPalette.error)
+                        Button("Réessayer l’enregistrement") { Task { _ = await chat.persistCurrent() } }
+                            .buttonStyle(ApercuActionStyle(primary: false))
                     }
-                }
-                .padding(.vertical, 8)
+                    if let image = chat.image {
+                        photoArea(image)
+                        if chat.turns.isEmpty {
+                            HStack(spacing: 8) {
+                                Button("Décrire", systemImage: "viewfinder") { chat.ask("Que voit-on sur cette photo ?") }
+                                Button("Lire le texte", systemImage: "text.viewfinder") { chat.ask("Pouvez-vous lire le texte ?") }
+                            }.buttonStyle(ApercuActionStyle(primary: false)).disabled(!chat.isModelReady || chat.isRestoring)
+                            Text("Que souhaitez-vous savoir sur cette photo ?").foregroundStyle(LfmPalette.secondary)
+                        }
+                        ForEach(chat.turns) { turn in
+                            AnswerBubble(turn: turn, isLast: turn.id == chat.turns.last?.id) { chat.regenerateLast() }
+                                .id(turn.id)
+                        }
+                    } else {
+                        Text("Une photo.\nDes réponses.").font(LfmPalette.title())
+                        Text("Choisissez une photo, puis posez votre question.").foregroundStyle(LfmPalette.secondary)
+                        VStack(spacing: 12) {
+                            Image(systemName: "photo.badge.plus").font(.system(size: 32)).accessibilityHidden(true)
+                            Text("Un objet, un document, une scène.").font(LfmPalette.body(13))
+                        }
+                        .foregroundStyle(LfmPalette.secondary).frame(maxWidth: .infinity, minHeight: 144)
+                        .background(LfmPalette.surface, in: RoundedRectangle(cornerRadius: 12))
+                        VStack(spacing: 8) {
+                            Button("Prendre une photo", systemImage: "camera") { showCamera = true }
+                                .buttonStyle(ApercuActionStyle()).disabled(chat.isRestoring || !UIImagePickerController.isSourceTypeAvailable(.camera))
+                            Button("Choisir une photo", systemImage: "photo.on.rectangle") { showLibrary = true }
+                                .buttonStyle(ApercuActionStyle(primary: false)).disabled(chat.isRestoring)
+                        }
+                        LocalSessionNote().padding(.top, 32)
+                    }
+                }.padding(20).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
             }
-            // Animate when a turn is added; scroll plainly while tokens stream, so
-            // per-token animations don't fight each other.
-            .onChange(of: viewModel.turns.count) { _, _ in
-                scroll(proxy, animated: !reduceMotion)
+            .onChange(of: chat.turns.count) { _, _ in
+                if let id = chat.turns.last?.id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
             }
-            .onChange(of: viewModel.turns.last?.answer) { _, _ in
-                scroll(proxy, animated: false)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .simultaneousGesture(TapGesture().onEnded { questionFocused = false })
         }
+        .background(LfmPalette.background)
+        .safeAreaInset(edge: .bottom, spacing: 0) { if chat.image != nil { composer } }
     }
 
-    private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard let last = viewModel.turns.last else { return }
-        if animated {
-            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-        } else {
-            proxy.scrollTo(last.id, anchor: .bottom)
+    private func photoArea(_ image: UIImage) -> some View {
+        Button { showPhoto = true } label: {
+            Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: 240)
+                .background(LfmPalette.surfaceSubtle).clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain).accessibilityLabel("Agrandir la photo")
+        .overlay(alignment: .topTrailing) {
+            Button("Changer", systemImage: "arrow.triangle.2.circlepath") { chooseSource = true }
+                .font(LfmPalette.body(12)).padding(8).frame(minHeight: 44)
+                .background(LfmPalette.surface, in: RoundedRectangle(cornerRadius: 8)).padding(8)
+                .disabled(!chat.canLeaveSession)
         }
     }
 
     private var composer: some View {
-        HStack(spacing: 8) {
-            TextField("Ask about this image", text: $viewModel.question, axis: .vertical)
-                .lineLimit(1...4)
-                .padding(10)
-                .background(LfmPalette.surfaceSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-                .focused($questionFocused)
-                .disabled(viewModel.image == nil)
-                .onSubmit(send)
-
-            if viewModel.isGenerating {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Votre question").font(LfmPalette.medium(12))
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("Que voulez-vous savoir ?", text: $chat.question, axis: .vertical)
+                    .font(LfmPalette.body(16)).lineLimit(1...4).padding(10)
+                    .background(LfmPalette.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(LfmPalette.divider, lineWidth: 1))
+                    .focused($questionFocused).submitLabel(.send)
+                    .onSubmit { questionFocused = false; chat.ask() }
+                    .accessibilityLabel("Votre question")
                 Button {
-                    viewModel.cancelGeneration()
+                    questionFocused = false
+                    if chat.isGenerating { chat.cancelGeneration() } else { chat.ask() }
                 } label: {
-                    Image(systemName: "stop.circle.fill").font(.title2)
+                    Image(systemName: chat.isGenerating ? "stop.fill" : "arrow.up")
+                        .frame(width: 44, height: 44).background(LfmPalette.accent).foregroundStyle(LfmPalette.onAccent)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-                .accessibilityLabel("Stop generating")
-            } else {
-                Button(action: send) {
-                    Image(systemName: "arrow.up.circle.fill").font(.title2)
+                .disabled(!chat.isGenerating && !chat.canAsk)
+                .opacity(!chat.isGenerating && !chat.canAsk ? 0.5 : 1)
+                .accessibilityLabel(chat.isGenerating ? "Arrêter la réponse" : "Envoyer la question")
+            }
+        }.padding(.horizontal, 20).padding(.vertical, 12).background(LfmPalette.surface)
+    }
+
+    private var modelScreen: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text(download.canUseDownloadedModel ? "Votre assistant,\nsur cet iPhone." : "Première utilisation")
+                    .font(LfmPalette.title())
+                if download.canUseDownloadedModel && chat.isModelReady {
+                    Text("Le modèle est prêt pour analyser vos photos.").foregroundStyle(LfmPalette.secondary)
+                    Button("Nouvelle session", action: newSession).buttonStyle(ApercuActionStyle()).disabled(!chat.canLeaveSession)
+                } else if download.failureMessage != nil || chat.loadFailure != nil {
+                    Label("Le modèle n’est pas disponible.", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(LfmPalette.error)
+                    Text("Vérifiez votre connexion et l’espace disponible, puis réessayez.")
+                        .font(LfmPalette.body(13)).foregroundStyle(LfmPalette.secondary)
+                    Button("Réessayer") {
+                        if download.canUseDownloadedModel { chat.retryLoad() } else { download.retry() }
+                    }.buttonStyle(ApercuActionStyle())
+                } else if download.isBackgroundDownloadInProgress || download.canUseDownloadedModel {
+                    Text(download.isBackgroundDownloadInProgress ? "Téléchargement du modèle" : "Préparation du modèle…")
+                        .font(LfmPalette.medium())
+                    if case let .downloading(progress?) = download.phase {
+                        ProgressView(value: progress)
+                        Text("\(Int((progress * 100).rounded())) %").font(LfmPalette.body(13)).monospacedDigit()
+                    } else { ProgressView().frame(maxWidth: .infinity) }
+                    Text("Vous pouvez quitter l’application pendant le téléchargement.")
+                        .font(LfmPalette.body(13)).foregroundStyle(LfmPalette.secondary)
+                } else {
+                    Text("Téléchargez le modèle pour commencer à utiliser Aperçu.").foregroundStyle(LfmPalette.secondary)
+                    VStack(alignment: .leading, spacing: 20) {
+                        Label("1–2 Go de données et de stockage", systemImage: "internaldrive")
+                        Label("Téléchargement en arrière-plan", systemImage: "iphone")
+                    }.font(LfmPalette.body(14)).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(LfmPalette.surface, in: RoundedRectangle(cornerRadius: 12))
+                    if network.isExpensive || network.isConstrained {
+                        Label("Ce téléchargement est volumineux. Privilégiez une connexion Wi-Fi.", systemImage: "wifi.exclamationmark")
+                            .font(LfmPalette.body(13)).foregroundStyle(LfmPalette.secondary)
+                    }
+                    Button("Télécharger le modèle", systemImage: "arrow.down.circle") { download.recordConsent() }
+                        .buttonStyle(ApercuActionStyle())
+                    Button("Plus tard") { path = [.menu] }
+                        .font(LfmPalette.body(14)).frame(maxWidth: .infinity, minHeight: 44)
                 }
-                .disabled(!viewModel.canAsk)
-                .accessibilityLabel("Send question")
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+                Button("Consulter l’historique", systemImage: "clock.arrow.circlepath") { path.append(.history) }
+                    .buttonStyle(ApercuActionStyle(primary: false))
+                if download.canRemoveDownloadedModel {
+                    Button("Supprimer le modèle téléchargé", role: .destructive) { confirmRemoveModel = true }
+                        .font(LfmPalette.body(13)).frame(minHeight: 44)
+                        .disabled(download.isRemoving || !chat.canRemoveDownloadedModel)
+                }
+                LocalSessionNote().padding(.top, 24)
+            }.padding(20).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
+        }.background(LfmPalette.background)
     }
 
-    // MARK: - Actions
-
-    private func send() {
-        questionFocused = false
-        viewModel.ask()
+    private func newSession() {
+        if chat.newSession() { path = [] }
     }
 
-    /// Selecting a new photo discards the current answers, so ask first when there
-    /// is something to lose.
-    private func propose(_ image: UIImage) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        if viewModel.hasTranscript {
-            pendingReplacement = image
-        } else {
-            viewModel.select(image)
-        }
+    private func loadInstalledModel() async {
+        guard download.canUseDownloadedModel else { return }
+        await chat.loadModel()
     }
 
-    private func loadFromLibrary(_ item: PhotosPickerItem) async {
-        defer { librarySelection = nil }
-        do {
-            guard
-                let data = try await item.loadTransferable(type: Data.self),
-                let image = UIImage(data: data)
-            else {
-                pickerFailure = "That file could not be read as an image."
-                return
-            }
-            propose(image)
-        } catch {
-            pickerFailure = error.localizedDescription
+    private func removeModel() async {
+        guard chat.canRemoveDownloadedModel, await chat.closeModelForRemoval() else { return }
+        switch await download.removeDownloadedModel() {
+        case .removed: message = "Le modèle a été supprimé. Vos sessions restent dans l’historique."
+        case .inUse: message = "Le modèle est encore utilisé. Réessayez après la réponse en cours."
+        case let .failed(reason): message = reason
         }
     }
 }
 
-#Preview {
-    ContentView()
+private extension View {
+    func apercuNavigation() -> some View {
+        self.font(LfmPalette.body()).foregroundStyle(LfmPalette.ink)
+            .background(LfmPalette.background)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(LfmPalette.surface, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar { ToolbarItem(placement: .principal) { ApercuWordmark() } }
+    }
 }

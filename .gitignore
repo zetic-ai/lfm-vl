@@ -11,6 +11,7 @@ Podfile.lock
 
 # Swift Package Manager
 .swiftpm/
+.build/
 
 # macOS
 .DS_Store

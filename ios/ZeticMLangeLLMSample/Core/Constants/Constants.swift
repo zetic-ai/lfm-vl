@@ -8,16 +8,14 @@ struct Constants {
     }
 
     struct Prompt {
-        static let system = "You are a concise vision assistant. Answer questions about the image the user provides. Be specific and factual, and say so when the image does not show enough to answer."
-        static let defaultQuestion = "What is this image about?"
+        static let system = "Tu es Aperçu, un assistant visuel concis. Réponds en français aux questions sur la photo fournie. Sois précis et factuel. Indique clairement lorsque la photo ne permet pas de répondre."
+        static let defaultQuestion = "Que voit-on sur cette photo ?"
 
         /// One-tap questions. Typing on a phone is the main cost of asking, so the
         /// common cases should never require the keyboard.
         static let suggestions = [
-            "Describe this",
-            "Read the text",
-            "What object is this?",
-            "What's happening?",
+            "Que voit-on sur cette photo ?",
+            "Pouvez-vous lire le texte ?",
         ]
     }
 

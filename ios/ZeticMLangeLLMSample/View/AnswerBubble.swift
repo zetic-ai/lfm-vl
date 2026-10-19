@@ -6,105 +6,45 @@ struct AnswerBubble: View {
     let onRegenerate: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(turn.question)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(LfmPalette.ink)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(turn.question).font(LfmPalette.body(14))
+                .padding(12).background(LfmPalette.surfaceSubtle)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(10)
-                .background(LfmPalette.accent.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-
+            if !turn.answer.isEmpty {
+                Text(turn.answer).font(LfmPalette.body()).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if turn.isStreaming {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(turn.phase == .readingImage ? "Analyse de la photo…" : "Réponse en cours…")
+                        .font(LfmPalette.body(12)).foregroundStyle(LfmPalette.secondary)
+                }.accessibilityElement(children: .combine)
+            }
+            if turn.phase == .interrupted {
+                Label("Réponse interrompue", systemImage: "pause.circle")
+                    .font(LfmPalette.body(12)).foregroundStyle(LfmPalette.secondary)
+            }
             if let failure = turn.failure {
                 Label(failure, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-                    .foregroundStyle(LfmPalette.error)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if turn.answer.isEmpty && turn.isStreaming {
-                statusLabel
-            } else {
-                answerBody
+                    .font(LfmPalette.body(13)).foregroundStyle(LfmPalette.error)
             }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
-    }
-
-    /// Image prefill is the slow phase on a VLM, so it gets its own wording rather
-    /// than a generic spinner that makes the app look hung.
-    private var statusLabel: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text(statusText)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var statusText: String {
-        switch turn.phase {
-        case .readingImage: return "Reading image…"
-        default: return "Answering…"
-        }
-    }
-
-    private var answerBody: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(turn.answer)
-                .font(.body)
-                .foregroundStyle(LfmPalette.ink)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(LfmPalette.surfaceSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-
             if !turn.isStreaming {
-                HStack(spacing: 14) {
-                    if let metrics = metricsText {
-                        Text(metrics)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                HStack(spacing: 8) {
+                    if !turn.answer.isEmpty {
+                        Button { UIPasteboard.general.string = turn.answer } label: { Label("Copier", systemImage: "doc.on.doc") }
+                            .font(LfmPalette.body(12)).frame(minHeight: 44)
+                        Spacer()
+                        ShareLink(item: turn.answer) { Image(systemName: "square.and.arrow.up") }
+                            .buttonStyle(ApercuIconStyle()).accessibilityLabel("Partager la réponse")
                     }
-
-                    Spacer()
-
-                    Button {
-                        UIPasteboard.general.string = turn.answer
-                        UINotificationFeedbackGenerator().notificationOccurred(.success)
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                    }
-                    .accessibilityLabel("Copy answer")
-
-                    ShareLink(item: turn.answer) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .accessibilityLabel("Share answer")
-
                     if isLast {
-                        Button(action: onRegenerate) {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .accessibilityLabel("Ask again")
+                        Button(action: onRegenerate) { Image(systemName: "arrow.clockwise") }
+                            .buttonStyle(ApercuIconStyle()).accessibilityLabel("Générer à nouveau")
                     }
-                }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 4)
+                }.foregroundStyle(LfmPalette.secondary)
             }
-        }
-    }
-
-    /// Time-to-first-token and throughput matter when inference runs on the phone.
-    private var metricsText: String? {
-        guard let firstTokenMs = turn.firstTokenMs else { return nil }
-        var parts = ["\(String(format: "%.1f", Double(firstTokenMs) / 1000))s to first token"]
-        if let tps = turn.approximateTokensPerSecond {
-            parts.append("~\(String(format: "%.0f", tps)) tok/s")
-        }
-        return parts.joined(separator: " · ")
+        }.foregroundStyle(LfmPalette.ink).padding(.vertical, 4)
     }
 }
