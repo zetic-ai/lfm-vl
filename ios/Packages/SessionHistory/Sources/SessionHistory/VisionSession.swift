@@ -34,13 +34,24 @@ public struct VisionSession: Identifiable, Codable, Equatable, Sendable {
     public var updatedAt: Date
     public var revision: Int
     public var turns: [VisionTurn]
+    public var aiInstructions: String?
 
-    public init(id: UUID = UUID(), createdAt: Date = Date(), turns: [VisionTurn] = []) {
+    public init(id: UUID = UUID(), createdAt: Date = Date(), turns: [VisionTurn] = [], aiInstructions: String? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.updatedAt = createdAt
         self.revision = 0
         self.turns = turns
+        self.aiInstructions = aiInstructions
+    }
+
+    @discardableResult
+    public mutating func appendQuestion(_ question: String, instructions: String) -> VisionTurn {
+        if turns.isEmpty && aiInstructions == nil { aiInstructions = instructions }
+        let turn = VisionTurn(question: question)
+        turns.append(turn)
+        didChange()
+        return turn
     }
 
     public var title: String { turns.first?.question ?? "Nouvelle session" }

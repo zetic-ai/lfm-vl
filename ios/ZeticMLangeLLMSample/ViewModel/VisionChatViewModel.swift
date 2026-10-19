@@ -18,6 +18,7 @@ final class VisionChatViewModel: ObservableObject {
     @Published var loadFailure: String?
 
     private let engine = VisionEngine()
+    private let instructions: AIInstructionStore
     private let store: SessionStore
     private var generationTask: Task<Void, Never>?
     private var preparedPhoto: SessionPhoto?
@@ -25,7 +26,10 @@ final class VisionChatViewModel: ObservableObject {
     private var savedRevision = 0
     private var restoreContext = true
 
-    init(store: SessionStore) { self.store = store }
+    init(store: SessionStore, instructions: AIInstructionStore? = nil) {
+        self.store = store
+        self.instructions = instructions ?? AIInstructionStore()
+    }
 
     var turns: [VisionTurn] { session?.turns ?? [] }
     var isModelReady: Bool { loadPhase == .ready }
@@ -122,9 +126,8 @@ final class VisionChatViewModel: ObservableObject {
         guard canAsk, let image, var active = session else { return }
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         let history = active.turns
-        let turn = VisionTurn(question: text)
-        active.turns.append(turn)
-        active.didChange()
+        let turn = active.appendQuestion(text, instructions: instructions.value)
+        let systemInstructions = AIInstructions.forSession(active.aiInstructions)
         session = active
         hasUnsavedChanges = true
         question = ""
@@ -153,7 +156,7 @@ final class VisionChatViewModel: ObservableObject {
                 try Task.checkCancellation()
                 let stream = try await self.engine.answer(
                     question: text, image: rgb, imageID: sessionID,
-                    history: history, restoreContext: shouldRestore
+                    history: history, restoreContext: shouldRestore, systemPrompt: systemInstructions
                 )
                 for try await piece in stream {
                     try Task.checkCancellation()
@@ -184,6 +187,7 @@ final class VisionChatViewModel: ObservableObject {
 
     func regenerateLast() {
         guard !isGenerating, let last = turns.last, session != nil else { return }
+        session?.aiInstructions = AIInstructions.forSession(session?.aiInstructions)
         session?.turns.removeLast()
         session?.didChange()
         restoreContext = true

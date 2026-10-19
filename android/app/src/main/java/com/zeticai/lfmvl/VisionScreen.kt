@@ -15,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +44,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -168,6 +170,8 @@ fun VisionScreen(viewModel: VisionViewModel) {
                 settingsOpen = false
                 removalConfirmationOpen = true
             },
+            instructions = state.aiInstructions,
+            onSaveInstructions = viewModel::saveAIInstructions,
             onDismiss = { settingsOpen = false },
         )
     }
@@ -352,28 +356,41 @@ private fun ModelSettingsDialog(
     canRemoveDownloadedModel: Boolean,
     modelStatus: ModelStatus,
     onRemove: () -> Unit,
+    instructions: String,
+    onSaveInstructions: (String) -> Boolean,
     onDismiss: () -> Unit,
-) = AlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text("Model settings") },
-    text = {
-        Text(
-            if (canRemoveDownloadedModel) {
-                "Remove the downloaded model. Downloading it again will require your consent."
-            } else if (modelStatus in setOf(ModelStatus.GENERATING, ModelStatus.INITIALIZING, ModelStatus.REMOVING)) {
-                "Finish the active response before removing the downloaded model."
-            } else {
-                "There is no downloaded model to remove."
-            },
-        )
-    },
-    confirmButton = {
-        TextButton(onClick = onRemove, enabled = canRemoveDownloadedModel) {
-            Text("Remove downloaded model", color = if (canRemoveDownloadedModel) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
-        }
-    },
-    dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-)
+) {
+    var draft by remember { mutableStateOf(instructions) }
+    var failure by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Settings") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("AI instructions", style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(draft, { draft = it; failure = false }, label = { Text("Your instructions") },
+                    minLines = 4, maxLines = 8, modifier = Modifier.fillMaxWidth(),
+                    isError = AIInstructions.validated(draft) == null)
+                Text("${draft.length} / ${AIInstructions.MAX_CHARACTERS} characters")
+                Text("Applies to new photo conversations. Conversations already started keep their instructions.")
+                TextButton(onClick = { draft = AIInstructions.DEFAULT; failure = false }) { Text("Restore default instructions") }
+                if (failure) Text("Could not save instructions. Please try again.", color = MaterialTheme.colorScheme.error)
+                HorizontalDivider()
+                Text(if (canRemoveDownloadedModel) "Remove the downloaded model. Your conversation stays on this phone."
+                    else if (modelStatus == ModelStatus.GENERATING) "Finish the active response before removing the model."
+                    else "There is no downloaded model to remove.")
+                TextButton(onClick = onRemove, enabled = canRemoveDownloadedModel) {
+                    Text("Remove downloaded model", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (onSaveInstructions(draft)) onDismiss() else failure = true },
+                enabled = AIInstructions.validated(draft) != null) { Text("Save instructions") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
 
 @Composable
 private fun ModelRemovalConfirmation(onRemove: () -> Unit, onDismiss: () -> Unit) = AlertDialog(

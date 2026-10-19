@@ -35,6 +35,9 @@ data class VisionUiState(
     val initializationProgress: Float? = null,
     val imageError: String? = null,
     val modelStorageMessage: String? = null,
+    val aiInstructions: String = AIInstructions.DEFAULT,
+    val sessionInstructions: String? = null,
+    val sessionStartedAt: Long = 0L,
 ) {
     val canAsk get() = status == ModelStatus.READY && preview != null && prompt.isNotBlank() && !imageUpdating
     val hasTranscript get() = turns.isNotEmpty()
@@ -55,7 +58,9 @@ internal fun VisionUiState.withImageDecodeFailure() = copy(
 
 class VisionViewModel(application: Application) : AndroidViewModel(application) {
     private val engine = VisionEngine(application.applicationContext)
-    private val _uiState = MutableStateFlow(VisionUiState())
+    private val instructionPreferences = application.getSharedPreferences("ai-instructions", 0)
+    private val _uiState = MutableStateFlow(VisionUiState(aiInstructions =
+        instructionPreferences.getString("instructions.v1", null)?.let(AIInstructions::validated) ?: AIInstructions.DEFAULT))
     val uiState = _uiState.asStateFlow()
     private var image: ZeticMLangeLLMModel.Image? = null
     private var imageUpdateInProgress = false
@@ -70,6 +75,13 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
     private var activeGenerationId: Long? = null
 
     init { if (isUsablePersonalKey(BuildConfig.ZETIC_PERSONAL_KEY)) prepareBackgroundDownload() else showMissingKey() }
+
+    fun saveAIInstructions(text: String): Boolean {
+        val value = AIInstructions.validated(text) ?: return false
+        if (!instructionPreferences.edit().putString("instructions.v1", value).commit()) return false
+        _uiState.update { it.copy(aiInstructions = value) }
+        return true
+    }
 
     fun updatePrompt(prompt: String) = _uiState.update { it.copy(prompt = prompt) }
 
@@ -288,7 +300,7 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
                     engine.resetSession()
                     image = decoded.modelImage
                     imageUpdateInProgress = false
-                    _uiState.update { it.copy(imageUri = uri, preview = decoded.preview, turns = emptyList(), prompt = DEFAULT_PROMPT, imageUpdating = false, message = "Ready") }
+                    _uiState.update { it.copy(imageUri = uri, preview = decoded.preview, turns = emptyList(), sessionInstructions = null, sessionStartedAt = System.currentTimeMillis(), prompt = DEFAULT_PROMPT, imageUpdating = false, message = "Ready") }
                 }
                 .onFailure { error ->
                     imageUpdateInProgress = false
@@ -303,14 +315,16 @@ class VisionViewModel(application: Application) : AndroidViewModel(application) 
         val selectedImage = image ?: return
         val question = (suggestion ?: _uiState.value.prompt).trim()
         if (question.isBlank() || !_uiState.value.canAsk) return
+        val current = _uiState.value
+        val instructions = AIInstructions.forConversation(current.sessionInstructions, current.hasTranscript, current.aiInstructions)
         val startedAt = System.currentTimeMillis()
         val turn = VisionTurn(id = ++turnId, question = question)
         val requestId = ++generationId
         activeGenerationId = requestId
-        _uiState.update { it.copy(status = ModelStatus.GENERATING, message = "Reading image…", prompt = DEFAULT_PROMPT, turns = it.turns + turn) }
+        _uiState.update { it.copy(status = ModelStatus.GENERATING, message = "Reading image…", prompt = DEFAULT_PROMPT, sessionInstructions = instructions, turns = it.turns + turn) }
         engineWork.launch {
             runCatching {
-                engine.respond(question, selectedImage).collect { token ->
+                engine.respond(question, selectedImage, instructions).collect { token ->
                     val elapsed = System.currentTimeMillis() - startedAt
                     _uiState.update { state ->
                         if (activeGenerationId != requestId) return@update state

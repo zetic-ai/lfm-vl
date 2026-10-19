@@ -11,6 +11,7 @@ actor VisionEngine {
     private var model: ZeticMLangeLLMModel?
 
     /// Identity of the image whose tokens are currently in the model's context.
+    private var contextInstructions: String?
     private var contextImageID: UUID?
     private var estimatedContextTokens = 0
 
@@ -32,28 +33,32 @@ actor VisionEngine {
         image: ZeticMLangeLLMModel.Image,
         imageID: UUID,
         history: [VisionTurn] = [],
-        restoreContext: Bool = false
+        restoreContext: Bool = false,
+        systemPrompt: String = Constants.Prompt.system
     ) async throws -> AsyncThrowingStream<String, Error> {
         guard let model else { throw VisionEngineError.notLoaded }
 
+        let instructionTokens = try model.tokenize(systemPrompt, parseSpecial: false).count
+        guard instructionTokens <= 160 else { throw VisionEngineError.instructionsTooLong }
         let questionTokens = try model.tokenize(question, parseSpecial: false).count
         guard questionTokens <= 256 else { throw VisionEngineError.questionTooLong }
-        let rebuild = restoreContext || contextImageID != imageID || estimatedContextTokens + questionTokens > 640
+        let rebuild = restoreContext || contextImageID != imageID || contextInstructions != systemPrompt || estimatedContextTokens + questionTokens > 640
         var prompt = question
         if rebuild {
             if contextImageID != nil { try clearContext(on: model) }
             prompt = try ConversationContext.restoredQuestion(
-                question, turns: history, historyTokenBudget: min(192, max(0, 384 - questionTokens)),
+                question, turns: history, historyTokenBudget: min(192, max(0, 384 - questionTokens - instructionTokens)),
                 tokenCount: { try model.tokenize($0, parseSpecial: false).count }
             )
             // Conservative headroom for image tokens and the next answer.
-            estimatedContextTokens = 256
+            estimatedContextTokens = 256 + instructionTokens
         }
+        contextInstructions = systemPrompt
         contextImageID = imageID
         estimatedContextTokens += try model.tokenize(prompt, parseSpecial: false).count
 
         return try model.respond(
-            systemPrompt: Constants.Prompt.system,
+            systemPrompt: systemPrompt,
             userText: prompt,
             image: image
         )
@@ -67,6 +72,7 @@ actor VisionEngine {
     func close() {
         model?.close()
         model = nil
+        contextInstructions = nil
         contextImageID = nil
         estimatedContextTokens = 0
     }
@@ -106,6 +112,7 @@ actor VisionEngine {
 enum VisionEngineError: LocalizedError {
     case notLoaded
     case missingPersonalAccessKey
+    case instructionsTooLong
     case questionTooLong
     case contextResetFailed(underlying: Error)
 
@@ -113,6 +120,8 @@ enum VisionEngineError: LocalizedError {
         switch self {
         case .notLoaded:
             return "Le modèle n’est pas encore prêt."
+        case .instructionsTooLong:
+            return "Raccourcissez les instructions de l’IA dans les paramètres, puis commencez une nouvelle conversation."
         case .questionTooLong:
             return "Cette question est trop longue. Essayez une formulation plus courte."
         case .missingPersonalAccessKey:

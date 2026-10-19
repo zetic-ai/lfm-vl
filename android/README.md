@@ -1,7 +1,7 @@
 # LFM Vision for Android
 
 This Jetpack Compose app uses LFM2.5-VL-450M through
-the configured internal ZETIC.MLange SDK release to answer questions about a
+the public ZETIC.MLange SDK 1.11.0 release to answer questions about a
 selected or captured photo on-device.
 
 ## Requirements
@@ -33,3 +33,9 @@ The app uses the system photo picker or camera capture, scales the selected
 image to a 512-pixel maximum edge, and streams responses into the UI. The
 first model download begins only after an explicit in-app approval; a later
 launch resumes only that versioned approval.
+
+## AI instructions
+
+Settings → AI instructions lets users edit, save or restore the default. Changes apply to the next photo conversation; follow-ups and regeneration retain the current conversation’s snapshot. Settings persist locally across relaunches. The UI rejects blank text and instructions longer than 400 characters. See [the instruction contract](../docs/ai-instructions.md).
+
+The SDK resolves from the public GitHub release Ivy repository; no GitHub Packages credential is needed. Real-device instruction-following quality remains to be validated.

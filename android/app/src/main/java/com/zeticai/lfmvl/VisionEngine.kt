@@ -21,9 +21,9 @@ class VisionEngine(private val context: Context) {
         )
     }
 
-    fun respond(prompt: String, image: ZeticMLangeLLMModel.Image): Flow<String> =
+    fun respond(prompt: String, image: ZeticMLangeLLMModel.Image, instructions: String = AIInstructions.DEFAULT): Flow<String> =
         requireNotNull(model) { "모델이 준비되지 않았습니다." }.respond(
-            systemPrompt = SYSTEM_PROMPT,
+            systemPrompt = instructions,
             userText = prompt,
             image = image,
         )
@@ -37,6 +37,5 @@ class VisionEngine(private val context: Context) {
 
     companion object {
         const val MODEL_NAME = "changgeun/LFM2.5-VL-450M"
-        private const val SYSTEM_PROMPT = "You are a concise vision assistant."
     }
 }
