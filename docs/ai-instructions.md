@@ -9,3 +9,7 @@ The native model's existing system-prompt parameter receives the snapshot. iOS c
 Android retains its current conversation scope; persistent photo history belongs to the existing iOS history work. Android now resolves public Melange SDK 1.11.0 because the old private package is unavailable with current build credentials; its native API build compatibility is checked, but device inference acceptance remains separate.
 
 Validation: 18 Foundation archive/instruction tests, an iOS Simulator build, 14 Android unit tests, Android debug build, lint and instrumentation-source compilation passed. The native iOS edit/save screen was inspected. No physical-device model inference was exercised.
+
+The iOS settings flow was checked for edit, save, relaunch persistence and default reset using a simulator fixture, without running model inference.
+
+![AI instruction settings](design/ai-instructions.png)
